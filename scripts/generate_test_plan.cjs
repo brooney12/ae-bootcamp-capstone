@@ -19,6 +19,8 @@ const {
   REPO_NAME,
   TRIGGERED_BY,
   TRIGGER_COMMENT,
+  MODEL_INPUT_COST_PER_1M = '5',
+  MODEL_OUTPUT_COST_PER_1M = '15',
   GITHUB_SERVER_URL = 'https://github.com',
 } = process.env;
 
@@ -31,6 +33,8 @@ const GH_API = 'api.github.com';
 const MODELS_HOST = 'models.inference.ai.azure.com';
 const MODEL = 'gpt-4o';
 const prNumber = parseInt(PR_NUMBER, 10);
+const INPUT_COST_PER_1M = Number(MODEL_INPUT_COST_PER_1M);
+const OUTPUT_COST_PER_1M = Number(MODEL_OUTPUT_COST_PER_1M);
 
 // ─── GitHub API helpers ───────────────────────────────────────────────────────
 
@@ -130,6 +134,7 @@ function callGitHubModels(systemPrompt, userPrompt) {
     const payload = JSON.stringify({
       model: MODEL,
       stream: true,
+      stream_options: { include_usage: true },
       max_tokens: 3000,
       temperature: 0.3,
       messages: [
@@ -157,6 +162,7 @@ function callGitHubModels(systemPrompt, userPrompt) {
         return;
       }
       let fullText = '';
+      let usage = null;
       res.on('data', (chunk) => {
         const lines = chunk.toString().split('\n').filter((l) => l.startsWith('data: '));
         for (const line of lines) {
@@ -164,6 +170,9 @@ function callGitHubModels(systemPrompt, userPrompt) {
           if (data === '[DONE]') return;
           try {
             const parsed = JSON.parse(data);
+            if (parsed.usage) {
+              usage = parsed.usage;
+            }
             const delta = parsed.choices?.[0]?.delta?.content || '';
             if (delta) {
               process.stdout.write(delta);
@@ -176,7 +185,7 @@ function callGitHubModels(systemPrompt, userPrompt) {
       });
       res.on('end', () => {
         console.log('\n');
-        resolve(fullText);
+        resolve({ text: fullText, usage });
       });
     });
 
@@ -269,7 +278,7 @@ Generate the complete test plan.`;
 
 // ─── Wiki helpers ─────────────────────────────────────────────────────────────
 
-function saveToWiki(prNumber, prTitle, content) {
+function saveToWiki(prNumber, prTitle, content, usage, cost) {
   const wikiRepo = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}.wiki.git`;
   const wikiDir = '/tmp/wiki';
   const safeTitle = prTitle.replace(/[^a-zA-Z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
@@ -296,7 +305,7 @@ function saveToWiki(prNumber, prTitle, content) {
   }
 
   const fs = require('fs');
-  const fullContent = buildWikiPage(prNumber, prTitle, content);
+  const fullContent = buildWikiPage(prNumber, prTitle, content, usage, cost);
   fs.writeFileSync(`${wikiDir}/${pageFile}`, fullContent);
 
   // Update the index page
@@ -312,9 +321,12 @@ function saveToWiki(prNumber, prTitle, content) {
   return { pageSlug, pageFile };
 }
 
-function buildWikiPage(prNumber, prTitle, planContent) {
+function buildWikiPage(prNumber, prTitle, planContent, usage, cost) {
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const prUrl = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}/pull/${prNumber}`;
+  const promptTokens = usage.promptTokens ?? 'N/A';
+  const completionTokens = usage.completionTokens ?? 'N/A';
+  const totalTokens = usage.totalTokens ?? 'N/A';
 
   return `# Test Plan: PR #${prNumber}
 
@@ -324,6 +336,10 @@ function buildWikiPage(prNumber, prTitle, planContent) {
 | **Generated** | ${now} |
 | **Triggered by** | @${TRIGGERED_BY || 'unknown'} |
 | **Model** | GitHub Models · ${MODEL} |
+| **Prompt tokens** | ${promptTokens} |
+| **Completion tokens** | ${completionTokens} |
+| **Total tokens** | ${totalTokens} |
+| **Estimated cost (USD)** | ${formatUsd(cost.totalCostUsd)} |
 
 ---
 
@@ -372,6 +388,49 @@ function countTests(markdown, section) {
   return (match[0].match(/^- \*\*Test\*\*/gm) || []).length;
 }
 
+function normalizeUsage(rawUsage) {
+  if (!rawUsage) {
+    return {
+      promptTokens: null,
+      completionTokens: null,
+      totalTokens: null,
+    };
+  }
+
+  return {
+    promptTokens: typeof rawUsage.prompt_tokens === 'number' ? rawUsage.prompt_tokens : null,
+    completionTokens: typeof rawUsage.completion_tokens === 'number' ? rawUsage.completion_tokens : null,
+    totalTokens: typeof rawUsage.total_tokens === 'number' ? rawUsage.total_tokens : null,
+  };
+}
+
+function formatUsd(amount) {
+  if (amount === null) return 'N/A';
+  return `$${amount.toFixed(4)}`;
+}
+
+function estimateCost(usage) {
+  const hasUsage = usage.promptTokens !== null && usage.completionTokens !== null;
+  const hasPricing = Number.isFinite(INPUT_COST_PER_1M) && Number.isFinite(OUTPUT_COST_PER_1M);
+
+  if (!hasUsage || !hasPricing) {
+    return {
+      inputCostUsd: null,
+      outputCostUsd: null,
+      totalCostUsd: null,
+    };
+  }
+
+  const inputCostUsd = (usage.promptTokens / 1000000) * INPUT_COST_PER_1M;
+  const outputCostUsd = (usage.completionTokens / 1000000) * OUTPUT_COST_PER_1M;
+
+  return {
+    inputCostUsd,
+    outputCostUsd,
+    totalCostUsd: inputCostUsd + outputCostUsd,
+  };
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -409,11 +468,14 @@ async function main() {
     console.log(`  Reviewer guidance detected: ${reviewerGuidance}`);
   }
   const userPrompt = buildUserPrompt(pr, files, issue, reviewerGuidance);
-  const testPlan = await callGitHubModels(SYSTEM_PROMPT, userPrompt);
+  const modelResponse = await callGitHubModels(SYSTEM_PROMPT, userPrompt);
+  const testPlan = modelResponse.text;
+  const usage = normalizeUsage(modelResponse.usage);
+  const cost = estimateCost(usage);
 
   // 5. Save to Wiki
   console.log('Saving to Wiki...');
-  const { pageSlug } = saveToWiki(prNumber, pr.title, testPlan);
+  const { pageSlug } = saveToWiki(prNumber, pr.title, testPlan, usage, cost);
 
   // 6. Build stats for PR comment
   const unitCount = countTests(testPlan, 'Unit Tests');
@@ -427,6 +489,12 @@ async function main() {
   // 7. Post PR comment
   const issueRef = issue ? ` (issue #${issue.number})` : '';
   const guidanceRef = reviewerGuidance ? `\n\n### ✍️ Reviewer guidance applied\n> ${reviewerGuidance}` : '';
+  const promptTokens = usage.promptTokens ?? 'N/A';
+  const completionTokens = usage.completionTokens ?? 'N/A';
+  const totalTokensForComment = usage.totalTokens ?? 'N/A';
+  const inputCostForComment = formatUsd(cost.inputCostUsd);
+  const outputCostForComment = formatUsd(cost.outputCostUsd);
+  const totalCostForComment = formatUsd(cost.totalCostUsd);
   const comment = [
     `## ✅ QA Test Plan Generated`,
     ``,
@@ -439,6 +507,16 @@ async function main() {
     `| 🟡 Integration | ${integrationCount} | ~20% |`,
     `| 🔴 UI / E2E | ${e2eCount} | ~10% |`,
     `| **Total** | **${totalCount}** | |`,
+    ``,
+    `### 🔢 Model usage`,
+    `| Metric | Value |`,
+    `|---|---|`,
+    `| Prompt tokens | ${promptTokens} |`,
+    `| Completion tokens | ${completionTokens} |`,
+    `| Total tokens | ${totalTokensForComment} |`,
+    `| Input cost (USD, est.) | ${inputCostForComment} |`,
+    `| Output cost (USD, est.) | ${outputCostForComment} |`,
+    `| Total cost (USD, est.) | ${totalCostForComment} |`,
     ``,
     `### 📖 Links`,
     `- [View full test plan on Wiki](${wikiUrl})`,
