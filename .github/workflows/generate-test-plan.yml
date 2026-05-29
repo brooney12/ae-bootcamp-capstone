@@ -53,6 +53,7 @@ jobs:
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           TRIGGERED_BY: ${{ github.event.comment.user.login }}
+          TRIGGER_COMMENT: ${{ github.event.comment.body }}
         run: node scripts/generate_test_plan.cjs
 
       - name: Post success reaction

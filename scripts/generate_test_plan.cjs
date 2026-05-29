@@ -18,6 +18,7 @@ const {
   REPO_OWNER,
   REPO_NAME,
   TRIGGERED_BY,
+  TRIGGER_COMMENT,
   GITHUB_SERVER_URL = 'https://github.com',
 } = process.env;
 
@@ -110,6 +111,18 @@ function parseIssueNumber(prBody) {
   return null;
 }
 
+function parseReviewerGuidance(commentBody) {
+  if (!commentBody) return '';
+
+  const command = '/generate-test-plan';
+  if (!commentBody.startsWith(command)) return '';
+
+  const rest = commentBody.slice(command.length).trim();
+  if (!rest) return '';
+
+  return rest.slice(0, 1500);
+}
+
 // ─── GitHub Models (streaming) ────────────────────────────────────────────────
 
 function callGitHubModels(systemPrompt, userPrompt) {
@@ -187,6 +200,7 @@ Rules:
 - Name the exact function, class, endpoint, or component under test
 - Only recommend UI/E2E when the AC explicitly describes a user workflow
 - Explain WHY each test belongs at its pyramid tier
+- If reviewer guidance is provided, explicitly incorporate it
 - If no issue linked, infer acceptance criteria from the PR title, description, and diff
 
 Output in this exact markdown structure:
@@ -218,10 +232,14 @@ Output in this exact markdown structure:
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
 
-function buildUserPrompt(pr, files, issue) {
+function buildUserPrompt(pr, files, issue, reviewerGuidance) {
   const issueSection = issue
     ? `## Linked Issue #${issue.number}: ${issue.title}\n\n${issue.body || 'No description.'}`
     : `## No linked issue\nInfer acceptance criteria from the PR description and diff.`;
+
+  const guidanceSection = reviewerGuidance
+    ? `## Reviewer Guidance\n${reviewerGuidance}`
+    : `## Reviewer Guidance\nNone provided.`;
 
   const filesSection = files
     .map(
@@ -242,6 +260,8 @@ ${pr.body || 'No description provided.'}
 ${filesSection}
 
 ${issueSection}
+
+${guidanceSection}
 
 ---
 Generate the complete test plan.`;
@@ -384,7 +404,11 @@ async function main() {
 
   // 4. Call GitHub Models
   console.log('\nCalling GitHub Models (gpt-4o)...\n---');
-  const userPrompt = buildUserPrompt(pr, files, issue);
+  const reviewerGuidance = parseReviewerGuidance(TRIGGER_COMMENT);
+  if (reviewerGuidance) {
+    console.log(`  Reviewer guidance detected: ${reviewerGuidance}`);
+  }
+  const userPrompt = buildUserPrompt(pr, files, issue, reviewerGuidance);
   const testPlan = await callGitHubModels(SYSTEM_PROMPT, userPrompt);
 
   // 5. Save to Wiki
@@ -402,6 +426,7 @@ async function main() {
 
   // 7. Post PR comment
   const issueRef = issue ? ` (issue #${issue.number})` : '';
+  const guidanceRef = reviewerGuidance ? `\n\n### ✍️ Reviewer guidance applied\n> ${reviewerGuidance}` : '';
   const comment = [
     `## ✅ QA Test Plan Generated`,
     ``,
@@ -418,6 +443,7 @@ async function main() {
     `### 📖 Links`,
     `- [View full test plan on Wiki](${wikiUrl})`,
     `- [QA Test Plans audit log](${wikiIndexUrl})`,
+    guidanceRef,
     ``,
     `> _Triggered by @${TRIGGERED_BY || 'unknown'} · GitHub Models · ${MODEL}_`,
   ].join('\n');
