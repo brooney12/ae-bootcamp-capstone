@@ -1,0 +1,127 @@
+.weather-app {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a3a5c 0%, #2d6a9f 50%, #4a9fd4 100%);
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.weather-card {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 24px;
+  padding: 40px;
+  width: 100%;
+  max-width: 420px;
+  color: #fff;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.location {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.pin {
+  font-size: 18px;
+}
+
+.date {
+  font-size: 14px;
+  opacity: 0.8;
+  margin: 0 0 32px;
+}
+
+.main-weather {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.weather-icon {
+  font-size: 72px;
+  line-height: 1;
+}
+
+.temperature {
+  font-size: 80px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.condition {
+  font-size: 22px;
+  font-weight: 500;
+  opacity: 0.9;
+  margin: 0 0 36px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.detail-item {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.detail-icon {
+  font-size: 22px;
+}
+
+.detail-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  opacity: 0.7;
+}
+
+.detail-value {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.loading,
+.error {
+  color: #fff;
+  font-size: 20px;
+  text-align: center;
+}
+
+@media (max-width: 480px) {
+  .weather-card {
+    padding: 28px 20px;
+  }
+
+  .temperature {
+    font-size: 60px;
+  }
+
+  .weather-icon {
+    font-size: 56px;
+  }
+}
+

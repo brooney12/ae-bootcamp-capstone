@@ -1,0 +1,433 @@
+/**
+ * generate_test_plan.js
+ *
+ * Agentic workflow script — runs inside GitHub Actions.
+ * 1. Fetches PR diff and linked issue acceptance criteria via GitHub REST API
+ * 2. Calls GitHub Models (gpt-4o) to generate a structured test plan
+ * 3. Pushes the plan as a Wiki page (git push to the wiki repo)
+ * 4. Posts a comment on the PR with the Wiki link
+ */
+
+const { execSync } = require('child_process');
+const https = require('https');
+
+// ─── Config from environment ──────────────────────────────────────────────────
+const {
+  GITHUB_TOKEN,
+  PR_NUMBER,
+  REPO_OWNER,
+  REPO_NAME,
+  TRIGGERED_BY,
+  GITHUB_SERVER_URL = 'https://github.com',
+} = process.env;
+
+if (!GITHUB_TOKEN || !PR_NUMBER || !REPO_OWNER || !REPO_NAME) {
+  console.error('Missing required environment variables');
+  process.exit(1);
+}
+
+const GH_API = 'api.github.com';
+const MODELS_HOST = 'models.inference.ai.azure.com';
+const MODEL = 'gpt-4o';
+const prNumber = parseInt(PR_NUMBER, 10);
+
+// ─── GitHub API helpers ───────────────────────────────────────────────────────
+
+function ghRequest(method, path, body = null) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: GH_API,
+      path,
+      method,
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'qa-test-planner-action',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`GitHub API ${res.statusCode} on ${method} ${path}: ${data}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          resolve(data);
+        }
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+async function fetchPR() {
+  console.log(`Fetching PR #${prNumber}...`);
+  return ghRequest('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}`);
+}
+
+async function fetchPRFiles() {
+  console.log('Fetching PR diff...');
+  const files = await ghRequest('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}/files?per_page=50`);
+  return files.map((f) => ({
+    filename: f.filename,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: f.patch ? truncateLines(f.patch, 80) : '(binary or no diff)',
+  }));
+}
+
+async function fetchIssue(issueNumber) {
+  console.log(`Fetching linked issue #${issueNumber}...`);
+  return ghRequest('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/issues/${issueNumber}`);
+}
+
+async function postComment(body) {
+  return ghRequest('POST', `/repos/${REPO_OWNER}/${REPO_NAME}/issues/${prNumber}/comments`, { body });
+}
+
+// ─── Issue number parser ──────────────────────────────────────────────────────
+
+function parseIssueNumber(prBody) {
+  if (!prBody) return null;
+  const patterns = [
+    /(?:closes?|fixes?|resolves?)\s+#(\d+)/i,
+    /(?:closes?|fixes?|resolves?)\s+https?:\/\/github\.com\/[^/]+\/[^/]+\/issues\/(\d+)/i,
+    /#(\d+)/,
+  ];
+  for (const p of patterns) {
+    const m = prBody.match(p);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}
+
+// ─── GitHub Models (streaming) ────────────────────────────────────────────────
+
+function callGitHubModels(systemPrompt, userPrompt) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: MODEL,
+      stream: true,
+      max_tokens: 3000,
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+
+    const options = {
+      hostname: MODELS_HOST,
+      path: '/chat/completions',
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'qa-test-planner-action',
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      if (res.statusCode >= 400) {
+        let err = '';
+        res.on('data', (c) => (err += c));
+        res.on('end', () => reject(new Error(`GitHub Models ${res.statusCode}: ${err}`)));
+        return;
+      }
+      let fullText = '';
+      res.on('data', (chunk) => {
+        const lines = chunk.toString().split('\n').filter((l) => l.startsWith('data: '));
+        for (const line of lines) {
+          const data = line.slice(6);
+          if (data === '[DONE]') return;
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content || '';
+            if (delta) {
+              process.stdout.write(delta);
+              fullText += delta;
+            }
+          } catch {
+            // skip malformed SSE chunks
+          }
+        }
+      });
+      res.on('end', () => {
+        console.log('\n');
+        resolve(fullText);
+      });
+    });
+
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+// ─── Prompts ──────────────────────────────────────────────────────────────────
+
+const SYSTEM_PROMPT = `You are a senior QA engineer and test architect. Generate precise, actionable test plans from pull request context and GitHub issue acceptance criteria.
+
+Follow the test pyramid:
+- **Unit tests (~70%)**: Pure functions, business logic, edge cases, error handling, isolated components
+- **Integration tests (~20%)**: API endpoints, database interactions, service contracts, external dependencies  
+- **UI/E2E tests (~10%)**: Critical user-facing workflows only — never duplicate what unit/integration tests cover
+
+Rules:
+- Map every test case to a specific acceptance criterion or code change
+- Name the exact function, class, endpoint, or component under test
+- Only recommend UI/E2E when the AC explicitly describes a user workflow
+- Explain WHY each test belongs at its pyramid tier
+- If no issue linked, infer acceptance criteria from the PR title, description, and diff
+
+Output in this exact markdown structure:
+
+## Summary
+2-3 sentence overview of changes and testing strategy.
+
+## Unit Tests
+### [Area]
+- **Test**: [What]
+  - **Why unit**: [Reason]
+  - **AC**: [Which criterion]
+  - **Scenario**: [Happy/edge/error]
+
+## Integration Tests
+### [Area]
+- **Test**: [What]
+  - **Why integration**: [Reason]
+  - **AC**: [Which criterion]
+  - **Scenario**: [What to validate]
+
+## UI / E2E Tests
+### [Critical workflow]
+- **Test**: [What]
+  - **Why E2E**: [Why not testable lower]
+  - **AC**: [Which criterion]
+  - **Steps**: [Brief outline]
+
+## Coverage Rationale
+Overall strategy and any deliberately excluded areas.`;
+
+function buildUserPrompt(pr, files, issue) {
+  const issueSection = issue
+    ? `## Linked Issue #${issue.number}: ${issue.title}\n\n${issue.body || 'No description.'}`
+    : `## No linked issue\nInfer acceptance criteria from the PR description and diff.`;
+
+  const filesSection = files
+    .map(
+      (f) =>
+        `### ${f.filename} (${f.status}, +${f.additions}/-${f.deletions})\n\`\`\`diff\n${f.patch}\n\`\`\``
+    )
+    .join('\n\n');
+
+  return `# Pull Request #${pr.number}: ${pr.title}
+
+## PR Description
+${pr.body || 'No description provided.'}
+
+## Branch
+\`${pr.head?.ref}\` → \`${pr.base?.ref}\`
+
+## Changed Files (${files.length} total)
+${filesSection}
+
+${issueSection}
+
+---
+Generate the complete test plan.`;
+}
+
+// ─── Wiki helpers ─────────────────────────────────────────────────────────────
+
+function saveToWiki(prNumber, prTitle, content) {
+  const wikiRepo = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}.wiki.git`;
+  const wikiDir = '/tmp/wiki';
+  const safeTitle = prTitle.replace(/[^a-zA-Z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
+  const pageSlug = `Test-Plan-PR-${prNumber}-${safeTitle}`.slice(0, 100);
+  const pageFile = `${pageSlug}.md`;
+
+  console.log(`Cloning wiki from ${wikiRepo}...`);
+
+  // Configure git identity for the commit
+  execSync(`git config --global user.email "github-actions[bot]@users.noreply.github.com"`);
+  execSync(`git config --global user.name "github-actions[bot]"`);
+
+  // Clone the wiki (create first page if wiki doesn't exist yet)
+  try {
+    execSync(
+      `git clone https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')} ${wikiDir}`,
+      { stdio: 'pipe' }
+    );
+  } catch (e) {
+    // Wiki may not exist yet — initialize it
+    console.log('Wiki not initialized, creating...');
+    execSync(`mkdir -p ${wikiDir}`);
+    execSync(`cd ${wikiDir} && git init && git remote add origin https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')}`);
+  }
+
+  const fs = require('fs');
+  const fullContent = buildWikiPage(prNumber, prTitle, content);
+  fs.writeFileSync(`${wikiDir}/${pageFile}`, fullContent);
+
+  // Update the index page
+  updateWikiIndex(wikiDir, prNumber, prTitle, pageSlug);
+
+  execSync(`cd ${wikiDir} && git add -A`);
+  execSync(`cd ${wikiDir} && git commit -m "Add test plan for PR #${prNumber}: ${prTitle}"`, {
+    stdio: 'pipe',
+  });
+  execSync(`cd ${wikiDir} && git push origin HEAD:master --force`, { stdio: 'pipe' });
+
+  console.log(`Wiki page saved: ${pageFile}`);
+  return { pageSlug, pageFile };
+}
+
+function buildWikiPage(prNumber, prTitle, planContent) {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const prUrl = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}/pull/${prNumber}`;
+
+  return `# Test Plan: PR #${prNumber}
+
+| Field | Value |
+|---|---|
+| **PR** | [#${prNumber} — ${prTitle}](${prUrl}) |
+| **Generated** | ${now} |
+| **Triggered by** | @${TRIGGERED_BY || 'unknown'} |
+| **Model** | GitHub Models · ${MODEL} |
+
+---
+
+${planContent}
+
+---
+*Auto-generated by the QA Test Planner workflow. Review and update as implementation proceeds.*
+`;
+}
+
+function updateWikiIndex(wikiDir, prNumber, prTitle, pageSlug) {
+  const fs = require('fs');
+  const indexPath = `${wikiDir}/QA-Test-Plans.md`;
+  const now = new Date().toISOString().slice(0, 10);
+  const newRow = `| [#${prNumber}](${pageSlug}) | ${prTitle} | ${now} | @${TRIGGERED_BY || 'unknown'} |`;
+
+  let index;
+  if (fs.existsSync(indexPath)) {
+    index = fs.readFileSync(indexPath, 'utf8');
+    // Append new row before the end
+    index = index.trimEnd() + '\n' + newRow + '\n';
+  } else {
+    index = `# QA Test Plans
+
+Audit log of all generated test plans.
+
+| PR | Title | Date | Triggered by |
+|---|---|---|---|
+${newRow}
+`;
+  }
+  fs.writeFileSync(indexPath, index);
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+function truncateLines(text, max) {
+  const lines = text.split('\n');
+  if (lines.length <= max) return text;
+  return lines.slice(0, max).join('\n') + `\n... (${lines.length - max} more lines truncated)`;
+}
+
+function countTests(markdown, section) {
+  const match = markdown.match(new RegExp(`## ${section}[\\s\\S]*?(?=\\n## |$)`));
+  if (!match) return 0;
+  return (match[0].match(/^- \*\*Test\*\*/gm) || []).length;
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log(`\n=== QA Test Planner — PR #${prNumber} ===\n`);
+
+  // 1. Fetch PR metadata
+  const pr = await fetchPR();
+  if (pr.state !== 'open') {
+    console.log('PR is not open — skipping.');
+    process.exit(0);
+  }
+
+  // 2. Fetch changed files
+  const files = await fetchPRFiles();
+  console.log(`  ${files.length} files changed`);
+
+  // 3. Fetch linked issue (if any)
+  const issueNumber = parseIssueNumber(pr.body);
+  let issue = null;
+  if (issueNumber) {
+    try {
+      issue = await fetchIssue(issueNumber);
+      console.log(`  Linked issue: #${issue.number} — ${issue.title}`);
+    } catch (e) {
+      console.warn(`  Could not fetch issue #${issueNumber}: ${e.message}`);
+    }
+  } else {
+    console.log('  No linked issue found — will infer AC from PR body');
+  }
+
+  // 4. Call GitHub Models
+  console.log('\nCalling GitHub Models (gpt-4o)...\n---');
+  const userPrompt = buildUserPrompt(pr, files, issue);
+  const testPlan = await callGitHubModels(SYSTEM_PROMPT, userPrompt);
+
+  // 5. Save to Wiki
+  console.log('Saving to Wiki...');
+  const { pageSlug } = saveToWiki(prNumber, pr.title, testPlan);
+
+  // 6. Build stats for PR comment
+  const unitCount = countTests(testPlan, 'Unit Tests');
+  const integrationCount = countTests(testPlan, 'Integration Tests');
+  const e2eCount = countTests(testPlan, 'UI / E2E Tests');
+  const totalCount = unitCount + integrationCount + e2eCount;
+
+  const wikiUrl = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}/wiki/${pageSlug}`;
+  const wikiIndexUrl = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}/wiki/QA-Test-Plans`;
+
+  // 7. Post PR comment
+  const issueRef = issue ? ` (issue #${issue.number})` : '';
+  const comment = [
+    `## ✅ QA Test Plan Generated`,
+    ``,
+    `A test plan has been generated for this PR based on the diff${issueRef} and saved to the project Wiki.`,
+    ``,
+    `### 📊 Test distribution`,
+    `| Tier | Count | Target |`,
+    `|---|---|---|`,
+    `| 🟢 Unit | ${unitCount} | ~70% |`,
+    `| 🟡 Integration | ${integrationCount} | ~20% |`,
+    `| 🔴 UI / E2E | ${e2eCount} | ~10% |`,
+    `| **Total** | **${totalCount}** | |`,
+    ``,
+    `### 📖 Links`,
+    `- [View full test plan on Wiki](${wikiUrl})`,
+    `- [QA Test Plans audit log](${wikiIndexUrl})`,
+    ``,
+    `> _Triggered by @${TRIGGERED_BY || 'unknown'} · GitHub Models · ${MODEL}_`,
+  ].join('\n');
+
+  await postComment(comment);
+  console.log('PR comment posted.');
+  console.log(`\nDone! Wiki page: ${wikiUrl}\n`);
+}
+
+main().catch((e) => {
+  console.error('\nFATAL:', e.message);
+  process.exit(1);
+});

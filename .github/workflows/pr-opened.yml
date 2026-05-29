@@ -1,0 +1,50 @@
+name: QA Test Plan Prompt
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+jobs:
+  prompt-qe:
+    name: Prompt QE reviewer
+    runs-on: ubuntu-latest
+    # Skip draft PRs
+    if: github.event.pull_request.draft == false
+
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Post QE prompt comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+
+            const body = [
+              `## 🧪 QA Test Plan Required`,
+              ``,
+              `Hi there! This PR is ready for QA review.`,
+              ``,
+              `A QE reviewer can generate an AI-assisted test plan based on:`,
+              `- The PR diff (all changed files)`,
+              `- The linked GitHub issue acceptance criteria`,
+              `- Test pyramid best practices (~70% unit / ~20% integration / ~10% UI/E2E)`,
+              ``,
+              `**To generate the test plan, comment:**`,
+              `\`\`\``,
+              `/generate-test-plan`,
+              `\`\`\``,
+              ``,
+              `The plan will be saved to the [project Wiki](../../wiki) for audit tracking and a summary will be posted back here.`,
+              ``,
+              `> _Powered by GitHub Models · gpt-4o_`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body,
+            });
