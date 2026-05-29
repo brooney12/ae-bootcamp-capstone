@@ -14,7 +14,7 @@ jobs:
     # 2. The comment body is exactly /generate-test-plan (trimmed)
     if: |
       github.event.issue.pull_request != null &&
-      startsWith(trim(github.event.comment.body), '/generate-test-plan')
+      startsWith(github.event.comment.body, '/generate-test-plan')
 
     permissions:
       contents: write        # needed to push to wiki

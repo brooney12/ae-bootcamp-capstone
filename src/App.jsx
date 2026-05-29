@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 
-const LATITUDE = 44.9778
-const LONGITUDE = -93.265
+const LATITUDE = 41.8781
+const LONGITUDE = -87.6298
 const API_URL =
   `https://api.open-meteo.com/v1/forecast` +
   `?latitude=${LATITUDE}&longitude=${LONGITUDE}` +
@@ -95,7 +95,7 @@ function App() {
       <div className="weather-card">
         <div className="location">
           <span className="pin">📍</span>
-          <span>Minneapolis, MN</span>
+          <span>Chicago, IL</span>
         </div>
         <p className="date">{formatDate(weather.time)}</p>
 
