@@ -197,7 +197,6 @@ function runCopilotMcp(prompt) {
       throw result.error;
     }
   }
-
   if (result.status !== 0) {
     throw new Error(
       `gh copilot exited with code ${result.status}: ${result.stderr || result.stdout}`
