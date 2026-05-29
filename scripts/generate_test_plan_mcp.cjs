@@ -171,19 +171,32 @@ function runCopilotMcp(prompt) {
     MCP_MODEL,
   ];
 
-  const result = spawnSync('gh', args, {
-    encoding: 'utf8',
-    maxBuffer: 20 * 1024 * 1024,
-    env: {
-      ...process.env,
-      GH_TOKEN: GITHUB_TOKEN,
-    },
-  });
+  const invokeCopilot = () =>
+    spawnSync('gh', args, {
+      encoding: 'utf8',
+      maxBuffer: 20 * 1024 * 1024,
+      env: {
+        ...process.env,
+        GH_TOKEN: GITHUB_TOKEN,
+      },
+    });
+
+  let result = invokeCopilot();
 
   if (result.error) {
     throw result.error;
   }
 
+  const combinedOutput = `${result.stderr || ''}\n${result.stdout || ''}`;
+  const installedDuringRun = combinedOutput.includes('Copilot CLI installed successfully');
+
+  // Fresh GitHub-hosted runners may install Copilot on first invocation and exit non-zero.
+  if (result.status !== 0 && installedDuringRun) {
+    result = invokeCopilot();
+    if (result.error) {
+      throw result.error;
+    }
+  }
   if (result.status !== 0) {
     throw new Error(
       `gh copilot exited with code ${result.status}: ${result.stderr || result.stdout}`

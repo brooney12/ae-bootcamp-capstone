@@ -11,10 +11,14 @@ jobs:
 
     # Only run when:
     # 1. The comment is on a pull request (not a plain issue)
-    # 2. The comment body is exactly /generate-test-plan (trimmed)
+    # 2. The comment starts with /generate-test-plan (optionally with guidance)
+    # 3. The comment is not the MCP command variant
     if: |
       github.event.issue.pull_request != null &&
-      startsWith(github.event.comment.body, '/generate-test-plan')
+      (
+        github.event.comment.body == '/generate-test-plan' ||
+        startsWith(github.event.comment.body, '/generate-test-plan ')
+      )
 
     permissions:
       contents: write        # needed to push to wiki
