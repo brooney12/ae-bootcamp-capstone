@@ -36,6 +36,7 @@ jobs:
               `\`\`\``,
               `/generate-test-plan`,
               `/generate-test-plan include negative integration scenarios around API failures`,
+              `/generate-test-plan-mcp include negative integration scenarios around API failures`,
               `\`\`\``,
               ``,
               `The plan will be saved to the [project Wiki](../../wiki) for audit tracking and a summary will be posted back here.`,
