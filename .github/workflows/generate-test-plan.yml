@@ -20,6 +20,7 @@ jobs:
       contents: write        # needed to push to wiki
       pull-requests: write   # needed to post comments
       issues: write          # needed to post comments (same as pull-requests for PRs)
+      models: read           # needed to call GitHub Models API
 
     steps:
       - name: Checkout repo
