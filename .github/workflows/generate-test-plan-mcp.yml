@@ -20,6 +20,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      models: read
 
     steps:
       - name: Checkout repo
@@ -44,6 +45,7 @@ jobs:
       - name: Generate MCP test plan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_TOKEN: ${{ secrets.COPILOT_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
