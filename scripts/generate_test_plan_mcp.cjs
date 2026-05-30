@@ -4,6 +4,7 @@ const https = require('https');
 
 const {
   GITHUB_TOKEN,
+  COPILOT_TOKEN,
   PR_NUMBER,
   REPO_OWNER,
   REPO_NAME,
@@ -22,6 +23,7 @@ if (!GITHUB_TOKEN || !PR_NUMBER || !REPO_OWNER || !REPO_NAME) {
 const GH_API = 'api.github.com';
 const prNumber = parseInt(PR_NUMBER, 10);
 const premiumRequestUnitCost = Number(MCP_PREMIUM_REQUEST_COST_USD);
+const copilotAuthToken = COPILOT_TOKEN || GITHUB_TOKEN;
 
 function ghRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
@@ -102,8 +104,32 @@ function buildCopilotPrompt(guidance) {
   ].join('\n');
 }
 
-function parseCopilotJsonl(stdout) {
-  const events = stdout
+function normalizeCopilotContent(content) {
+  if (!content) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        if (typeof part.text === 'string') return part.text;
+        if (typeof part.content === 'string') return part.content;
+        if (typeof part.value === 'string') return part.value;
+        if (typeof part.markdown === 'string') return part.markdown;
+        return '';
+      })
+      .join('');
+  }
+  if (typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+    if (typeof content.value === 'string') return content.value;
+  }
+  return '';
+}
+
+function parseCopilotJsonl(rawOutput) {
+  const events = rawOutput
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
@@ -121,16 +147,27 @@ function parseCopilotJsonl(stdout) {
   let model = MCP_MODEL;
 
   for (const event of events) {
-    if (event.type === 'assistant.message') {
-      const data = event.data || {};
-      if (typeof data.outputTokens === 'number') {
-        outputTokens += data.outputTokens;
-      }
-      if (typeof data.model === 'string' && data.model) {
-        model = data.model;
-      }
-      if (typeof data.content === 'string' && data.content.trim()) {
-        testPlan = data.content;
+    const data = event.data || {};
+    if (typeof data.outputTokens === 'number') {
+      outputTokens += data.outputTokens;
+    }
+    if (typeof data.model === 'string' && data.model) {
+      model = data.model;
+    }
+
+    const candidateContent = [
+      data.content,
+      data.message?.content,
+      data.delta?.content,
+      event.content,
+      event.message?.content,
+    ];
+
+    for (const content of candidateContent) {
+      const normalized = normalizeCopilotContent(content).trim();
+      // Keep the richest body we see; streaming variants may emit partial chunks first.
+      if (normalized.length > testPlan.length) {
+        testPlan = normalized;
       }
     }
   }
@@ -139,7 +176,10 @@ function parseCopilotJsonl(stdout) {
   const usage = resultEvent?.usage || {};
 
   if (!testPlan) {
-    throw new Error('Copilot MCP run did not produce a test plan body');
+    const eventTypes = [...new Set(events.map((event) => event.type).filter(Boolean))].join(', ');
+    throw new Error(
+      `Copilot MCP run did not produce a test plan body. Observed event types: ${eventTypes || 'none'}`
+    );
   }
 
   return {
@@ -156,7 +196,7 @@ function parseCopilotJsonl(stdout) {
 }
 
 function runCopilotMcp(prompt) {
-  const args = [
+  const baseArgs = [
     'copilot',
     '--',
     '-p',
@@ -165,26 +205,49 @@ function runCopilotMcp(prompt) {
     '--enable-all-github-mcp-tools',
     '--output-format',
     'json',
-    '--stream',
-    'off',
     '--model',
     MCP_MODEL,
   ];
 
-  const invokeCopilot = () =>
+  const invokeCopilot = (args) =>
     spawnSync('gh', args, {
       encoding: 'utf8',
       maxBuffer: 20 * 1024 * 1024,
       env: {
         ...process.env,
-        GH_TOKEN: GITHUB_TOKEN,
+        GH_TOKEN: copilotAuthToken,
+        GITHUB_TOKEN: copilotAuthToken,
       },
     });
 
-  let result = invokeCopilot();
+  const argVariants = [
+    [...baseArgs, '--stream', 'off'],
+    [...baseArgs],
+    [...baseArgs, '--stream'],
+  ];
+
+  let usedArgs = argVariants[0];
+  let result = invokeCopilot(usedArgs);
 
   if (result.error) {
     throw result.error;
+  }
+
+  const unknownStreamFlag = (output) =>
+    /unknown option '--no-stream'|unknown option '--stream'/i.test(output || '');
+
+  // Support older/newer gh copilot CLI variants that disagree on stream flags.
+  if (result.status !== 0 && unknownStreamFlag(`${result.stderr || ''}\n${result.stdout || ''}`)) {
+    for (let i = 1; i < argVariants.length; i += 1) {
+      usedArgs = argVariants[i];
+      result = invokeCopilot(usedArgs);
+      if (result.error) {
+        throw result.error;
+      }
+      if (result.status === 0 || !unknownStreamFlag(`${result.stderr || ''}\n${result.stdout || ''}`)) {
+        break;
+      }
+    }
   }
 
   const combinedOutput = `${result.stderr || ''}\n${result.stdout || ''}`;
@@ -198,8 +261,50 @@ function runCopilotMcp(prompt) {
     }
   }
   if (result.status !== 0) {
+    const stderr = result.stderr || '';
+    const stdout = result.stdout || '';
+    const combined = `${stderr}\n${stdout}`;
+
+    // If output is usable despite a non-zero exit, continue with parsed content.
+    try {
+      const recovered = parseCopilotJsonl(combined);
+      if (recovered.testPlan) {
+        console.warn('gh copilot exited non-zero, but recoverable MCP output was found. Continuing.');
+        return recovered;
+      }
+    } catch {
+      // Fall through to actionable error below.
+    }
+
+    const authHints = ['authentication', 'auth', 'login', 'token', 'forbidden', 'unauthorized'];
+    const outputLower = combined.toLowerCase();
+    const likelyAuthFailure = authHints.some((hint) => outputLower.includes(hint));
+    const mcpConnectedThenAborted = outputLower.includes('session.mcp_server_status_changed');
+
+    if (mcpConnectedThenAborted) {
+      throw new Error(
+        [
+          `gh copilot exited with code ${result.status} after MCP connection was established.`,
+          `Args used: ${usedArgs.join(' ')}`,
+          'This usually indicates Copilot session authorization/policy failure in Actions, or missing tool/session permissions.',
+          'Verify repository secret COPILOT_TOKEN is set to a PAT from a Copilot-licensed user and that org policy allows Copilot in Actions.',
+          `Raw output: ${stderr || stdout}`,
+        ].join(' ')
+      );
+    }
+
+    if (likelyAuthFailure && !COPILOT_TOKEN) {
+      throw new Error(
+        [
+          'gh copilot authentication failed in CI.',
+          'Set a repository secret named COPILOT_TOKEN and map it in the workflow env.',
+          'Using the default GITHUB_TOKEN is often insufficient for MCP-enabled Copilot CLI calls in GitHub Actions.',
+          `Original error: ${stderr || stdout}`,
+        ].join(' ')
+      );
+    }
     throw new Error(
-      `gh copilot exited with code ${result.status}: ${result.stderr || result.stdout}`
+      `gh copilot exited with code ${result.status} (args: ${usedArgs.join(' ')}): ${stderr || stdout}`
     );
   }
 
