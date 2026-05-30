@@ -165,8 +165,7 @@ function runCopilotMcp(prompt) {
     '--enable-all-github-mcp-tools',
     '--output-format',
     'json',
-    '--stream',
-    'off',
+    '--no-stream',
     '--model',
     MCP_MODEL,
   ];
