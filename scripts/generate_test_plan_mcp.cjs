@@ -362,23 +362,6 @@ function runCopilotMcp(prompt) {
   return parseCopilotJsonl(result.stdout || '');
 }
 
-function runNonMcpFallback(reason) {
-  const fallbackComment = (TRIGGER_COMMENT || '').replace(
-    /^\/generate-test-plan-mcp/,
-    '/generate-test-plan'
-  );
-
-  console.warn('\nMCP generation failed; falling back to non-MCP GitHub Models workflow.');
-  console.warn(`Fallback reason: ${reason}`);
-
-  execSync('node scripts/generate_test_plan.cjs', {
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      TRIGGER_COMMENT: fallbackComment,
-    },
-  });
-}
 
 function estimateMcpCost(premiumRequests) {
   const canEstimate = Number.isFinite(premiumRequestUnitCost);
@@ -463,23 +446,7 @@ async function main() {
   }
 
   const prompt = buildCopilotPrompt(reviewerGuidance);
-  let mcpResult;
-  try {
-    mcpResult = runCopilotMcp(prompt);
-  } catch (error) {
-    const message = (error && error.message) || String(error);
-    const shouldFallback =
-      /write epipe/i.test(message) ||
-      /authentication failed/i.test(message) ||
-      /copilot requests/i.test(message) ||
-      /authorization\/policy failure/i.test(message);
-
-    if (shouldFallback) {
-      runNonMcpFallback(message);
-      return;
-    }
-    throw error;
-  }
+  const mcpResult = runCopilotMcp(prompt);
   const estimatedCostUsd = estimateMcpCost(mcpResult.premiumRequests);
 
   const runMeta = {
