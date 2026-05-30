@@ -25,6 +25,16 @@ const prNumber = parseInt(PR_NUMBER, 10);
 const premiumRequestUnitCost = Number(MCP_PREMIUM_REQUEST_COST_USD);
 const copilotAuthToken = COPILOT_TOKEN || GITHUB_TOKEN;
 
+if (typeof COPILOT_TOKEN === 'string' && COPILOT_TOKEN.startsWith('ghp_')) {
+  console.error(
+    [
+      'Invalid COPILOT_TOKEN: classic PATs (ghp_) are not supported by Copilot CLI.',
+      'Use a fine-grained PAT for COPILOT_TOKEN, or remove COPILOT_TOKEN to let the workflow use GITHUB_TOKEN.',
+    ].join(' ')
+  );
+  process.exit(1);
+}
+
 function ghRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
     const options = {
