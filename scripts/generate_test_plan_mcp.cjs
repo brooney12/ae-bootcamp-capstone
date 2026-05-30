@@ -230,6 +230,34 @@ function runCopilotMcp(prompt) {
       },
     });
 
+  const isEpipeFailure = (result) => {
+    const errorText = [
+      result?.error?.message,
+      result?.stderr,
+      result?.stdout,
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .toLowerCase();
+    return result?.error?.code === 'EPIPE' || errorText.includes('write epipe');
+  };
+
+  const invokeCopilotWithRetry = (args, maxAttempts = 3) => {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const current = invokeCopilot(args);
+      lastResult = current;
+
+      // Retry transient pipe failures from the gh child process.
+      if (isEpipeFailure(current) && attempt < maxAttempts) {
+        console.warn(`gh copilot hit EPIPE (attempt ${attempt}/${maxAttempts}); retrying...`);
+        continue;
+      }
+      return current;
+    }
+    return lastResult;
+  };
+
   const argVariants = [
     [...baseArgs, '--stream', 'off'],
     [...baseArgs],
@@ -237,7 +265,7 @@ function runCopilotMcp(prompt) {
   ];
 
   let usedArgs = argVariants[0];
-  let result = invokeCopilot(usedArgs);
+  let result = invokeCopilotWithRetry(usedArgs);
 
   if (result.error) {
     throw result.error;
@@ -250,7 +278,7 @@ function runCopilotMcp(prompt) {
   if (result.status !== 0 && unknownStreamFlag(`${result.stderr || ''}\n${result.stdout || ''}`)) {
     for (let i = 1; i < argVariants.length; i += 1) {
       usedArgs = argVariants[i];
-      result = invokeCopilot(usedArgs);
+      result = invokeCopilotWithRetry(usedArgs);
       if (result.error) {
         throw result.error;
       }
@@ -264,7 +292,7 @@ function runCopilotMcp(prompt) {
 
   // Fresh GitHub-hosted runners may install Copilot on first invocation and exit non-zero.
   if (result.status !== 0 && installedDuringRun) {
-    result = invokeCopilot(usedArgs);
+    result = invokeCopilotWithRetry(usedArgs);
     if (result.error) {
       throw result.error;
     }
