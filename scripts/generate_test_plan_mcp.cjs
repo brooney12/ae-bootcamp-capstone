@@ -289,6 +289,20 @@ function runCopilotMcp(prompt) {
     const outputLower = combined.toLowerCase();
     const likelyAuthFailure = authHints.some((hint) => outputLower.includes(hint));
     const mcpConnectedThenAborted = outputLower.includes('session.mcp_server_status_changed');
+    const missingCopilotRequestsPerm =
+      outputLower.includes('copilot requests') ||
+      (outputLower.includes('authentication failed') && outputLower.includes('fine-grained pat'));
+
+    if (missingCopilotRequestsPerm) {
+      throw new Error(
+        [
+          'gh copilot authentication failed for a fine-grained PAT.',
+          'Update COPILOT_TOKEN to a fine-grained PAT that has repository access and the "Copilot Requests" permission enabled.',
+          'Also ensure the token owner has an active Copilot seat and SSO is authorized for the org if required.',
+          `Raw output: ${stderr || stdout}`,
+        ].join(' ')
+      );
+    }
 
     if (mcpConnectedThenAborted) {
       throw new Error(
@@ -296,7 +310,7 @@ function runCopilotMcp(prompt) {
           `gh copilot exited with code ${result.status} after MCP connection was established.`,
           `Args used: ${usedArgs.join(' ')}`,
           'This usually indicates Copilot session authorization/policy failure in Actions, or missing tool/session permissions.',
-          'Verify repository secret COPILOT_TOKEN is set to a PAT from a Copilot-licensed user and that org policy allows Copilot in Actions.',
+          'Verify repository secret COPILOT_TOKEN is set to a fine-grained PAT from a Copilot-licensed user with "Copilot Requests" permission, and that org policy allows Copilot in Actions.',
           `Raw output: ${stderr || stdout}`,
         ].join(' ')
       );
