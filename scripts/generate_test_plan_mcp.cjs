@@ -1,6 +1,5 @@
 const { execSync, spawnSync } = require('child_process');
 const fs = require('fs');
-const https = require('https');
 
 const {
   GITHUB_TOKEN,
@@ -25,7 +24,6 @@ if (!GITHUB_TOKEN || !PR_NUMBER || !REPO_OWNER || !REPO_NAME) {
 process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(1); });
 process.stderr.on('error', (err) => { if (err.code === 'EPIPE') process.exit(1); });
 
-const GH_API = 'api.github.com';
 const prNumber = parseInt(PR_NUMBER, 10);
 const premiumRequestUnitCost = Number(MCP_PREMIUM_REQUEST_COST_USD);
 const copilotAuthToken = COPILOT_TOKEN || GITHUB_TOKEN;
@@ -40,76 +38,21 @@ if (typeof COPILOT_TOKEN === 'string' && COPILOT_TOKEN.startsWith('ghp_')) {
   process.exit(1);
 }
 
-const TRANSIENT_ERRORS = new Set(['EPIPE', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND']);
-
-function isTransientNetworkError(err) {
-  if (!err) return false;
-  if (TRANSIENT_ERRORS.has(err.code)) return true;
-  const msg = (err.message || '').toLowerCase();
-  return msg.includes('socket hang up') || msg.includes('write epipe') || msg.includes('econnreset');
-}
-
-function ghRequestOnce(method, path, body = null) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: GH_API,
-      path,
-      method,
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'qa-test-planner-mcp-action',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        if (res.statusCode >= 400) {
-          reject(new Error(`GitHub API ${res.statusCode} on ${method} ${path}: ${data}`));
-          return;
-        }
-
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          resolve(data);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    if (body) req.write(JSON.stringify(body));
-    req.end();
-  });
-}
-
-async function ghRequest(method, path, body = null, maxAttempts = 4) {
-  let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await ghRequestOnce(method, path, body);
-    } catch (err) {
-      lastErr = err;
-      if (!isTransientNetworkError(err) || attempt >= maxAttempts) throw err;
-      const delayMs = 1000 * attempt;
-      console.warn(`GitHub API ${method} ${path} failed (${err.message}) — retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})...`);
-      await new Promise((r) => setTimeout(r, delayMs));
+// Post a comment on the PR via the gh CLI — no direct HTTPS needed.
+function postComment(body) {
+  const result = spawnSync(
+    'gh',
+    ['api', `repos/${REPO_OWNER}/${REPO_NAME}/issues/${prNumber}/comments`,
+     '--method', 'POST', '--input', '-'],
+    {
+      input: JSON.stringify({ body }),
+      encoding: 'utf8',
+      env: { ...process.env, GH_TOKEN: GITHUB_TOKEN, GH_PAGER: 'cat' },
     }
+  );
+  if (result.status !== 0) {
+    throw new Error(`Failed to post PR comment: ${result.stderr || result.stdout}`);
   }
-  throw lastErr;
-}
-
-async function fetchPR() {
-  console.log(`Fetching PR #${prNumber}...`);
-  return ghRequest('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}`);
-}
-
-async function postComment(body) {
-  return ghRequest('POST', `/repos/${REPO_OWNER}/${REPO_NAME}/issues/${prNumber}/comments`, { body });
 }
 
 function parseReviewerGuidance(commentBody) {
@@ -535,12 +478,6 @@ ${planContent}
 async function main() {
   console.log(`\n=== QA MCP Test Planner — PR #${prNumber} ===\n`);
 
-  const pr = await fetchPR();
-  if (pr.state !== 'open') {
-    console.log('PR is not open — skipping.');
-    process.exit(0);
-  }
-
   const reviewerGuidance = parseReviewerGuidance(TRIGGER_COMMENT);
   if (reviewerGuidance) {
     console.log(`Reviewer guidance detected: ${reviewerGuidance}`);
@@ -555,7 +492,7 @@ async function main() {
     estimatedCostUsd,
   };
 
-  const { pageSlug } = saveToWiki(pr.title, mcpResult.testPlan, runMeta);
+  const { pageSlug } = saveToWiki(`PR #${prNumber}`, mcpResult.testPlan, runMeta);
   const wikiUrl = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}/wiki/${pageSlug}`;
 
   const unitCount = countTests(mcpResult.testPlan, 'Unit Tests');
@@ -567,10 +504,18 @@ async function main() {
     ? `\n\n### ✍️ Reviewer guidance applied\n> ${reviewerGuidance}`
     : '';
 
+  // Cost comparison reference: API flow uses gpt-4o via GitHub Models (token billing).
+  const apiInputCostPer1M = 5;    // USD per 1M input tokens (gpt-4o, GitHub Models)
+  const apiOutputCostPer1M = 15;  // USD per 1M output tokens
+  const apiTypicalInput = 3000;
+  const apiTypicalOutput = 1500;
+  const apiTypicalCostUsd = ((apiTypicalInput / 1e6) * apiInputCostPer1M)
+    + ((apiTypicalOutput / 1e6) * apiOutputCostPer1M);
+
   const comment = [
     `## ✅ QA MCP Test Plan Generated`,
     '',
-    `A test plan was generated via MCP tooling and saved to the project Wiki.`,
+    `A test plan was generated via GitHub MCP tooling and saved to the project Wiki.`,
     '',
     `### 📊 Test distribution`,
     `| Tier | Count |`,
@@ -590,14 +535,22 @@ async function main() {
     `| Session duration (ms) | ${runMeta.sessionDurationMs ?? 'N/A'} |`,
     `| Estimated cost (USD) | ${formatUsd(runMeta.estimatedCostUsd)} |`,
     '',
+    `### 💰 Cost comparison`,
+    `| Approach | Model | Billing | This run | Typical/run |`,
+    `|---|---|---|---|---|`,
+    `| 🤖 **MCP** _(this run)_ | ${runMeta.model} | Premium requests | ${runMeta.premiumRequests ?? 'N/A'} req · ${formatUsd(runMeta.estimatedCostUsd)} | 2–10 req |`,
+    `| 📊 **API** | gpt-4o | Tokens | N/A | ~${apiTypicalInput + apiTypicalOutput} tokens · ${formatUsd(apiTypicalCostUsd)} |`,
+    ``,
+    `> **MCP** is billed per [Copilot premium request](https://docs.github.com/en/copilot/using-github-copilot/ai-models/about-github-copilot-and-ai-models) (one agentic tool call = one request). **API** charges per token at \$${apiInputCostPer1M}/1M input + \$${apiOutputCostPer1M}/1M output via GitHub Models. Actual cost scales with PR diff size.`,
+    '',
     `### 📖 Links`,
     `- [View MCP test plan on Wiki](${wikiUrl})`,
     guidanceRef,
     '',
-    `> _Triggered by @${TRIGGERED_BY || 'unknown'} · MCP via Copilot CLI_`,
+    `> _Triggered by @${TRIGGERED_BY || 'unknown'} · GitHub MCP via Copilot CLI_`,
   ].join('\n');
 
-  await postComment(comment);
+  postComment(comment);
   console.log('PR comment posted.');
   console.log(`Done! Wiki page: ${wikiUrl}`);
 }
