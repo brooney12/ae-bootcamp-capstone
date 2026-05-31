@@ -227,9 +227,9 @@ Rules:
 - If no issue linked, infer acceptance criteria from the PR title, description, and diff
 
 Output in this EXACT markdown structure. STRICT RULES:
-- Each test section header must be followed IMMEDIATELY by the table header row — no blank lines, no blockquotes, no introductory text between the `##` heading and the `|` table row.
+- Each test section header must be followed IMMEDIATELY by the table header row - no blank lines, no blockquotes, no introductory text between the ## heading and the table row.
 - Every test section MUST use a markdown table. Never use bullet points or numbered lists in test sections.
-- If no tests apply in a section, still include the table header row with a single row saying `| None | N/A | N/A | N/A |`.
+- If no tests apply in a section, still include the table header row with a single row saying | None | N/A | N/A | N/A |.
 
 ## Summary
 2-3 sentence overview of changes and testing strategy.
@@ -250,7 +250,9 @@ Output in this EXACT markdown structure. STRICT RULES:
 | [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
 
 ## Coverage Rationale
-Overall strategy and any deliberately excluded areas.`; {
+Overall strategy and any deliberately excluded areas.`;
+
+function buildSystemPrompt() {
   const agentInstructions = loadAgentInstructions();
   if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
 
@@ -276,14 +278,6 @@ Output in this EXACT markdown structure. STRICT RULES:
 | Test | Why Integration | AC | Scenario |
 |---|---|---|---|
 | [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
-
-## UI / E2E Tests
-| Test | Why E2E | AC | Steps |
-|---|---|---|---|
-| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
-
-## Coverage Rationale
-Overall strategy and any deliberately excluded areas.`;
 
 ## UI / E2E Tests
 | Test | Why E2E | AC | Steps |
