@@ -86,21 +86,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Try the canonical wiki page name first, then fall back to a list search
-          PAGE_NAME="Test-Plan-PR-${PR_NUMBER}"
-          WIKI_URL="https://raw.githubusercontent.com/wiki/${REPO_OWNER}/${REPO_NAME}/${PAGE_NAME}.md"
+          # The test plan generator saves pages as Test-Plan-PR-<N>-<sanitized-title>.md
+          # so we can't know the exact slug. Clone the wiki and find the right page by prefix.
+          WIKI_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO_OWNER}/${REPO_NAME}.wiki.git"
+          WIKI_DIR="/tmp/wiki-fetch"
+          rm -rf "${WIKI_DIR}"
 
-          echo "Fetching wiki page: ${WIKI_URL}"
-          HTTP_STATUS=$(curl -s -o /tmp/test_plan.md -w "%{http_code}" \
-            -H "Authorization: token ${GITHUB_TOKEN}" \
-            "${WIKI_URL}")
-
-          if [[ "$HTTP_STATUS" != "200" ]]; then
-            echo "Wiki page not found (HTTP ${HTTP_STATUS}). Creating placeholder."
+          git clone --depth=1 "${WIKI_REPO}" "${WIKI_DIR}" 2>/dev/null && {
+            # Find the first page whose filename starts with Test-Plan-PR-<N>
+            MATCH=$(find "${WIKI_DIR}" -maxdepth 1 -name "Test-Plan-PR-${PR_NUMBER}-*.md" | sort | head -n1)
+            if [[ -n "${MATCH}" ]]; then
+              echo "Found wiki page: ${MATCH}"
+              cp "${MATCH}" /tmp/test_plan.md
+            else
+              echo "No wiki page found matching Test-Plan-PR-${PR_NUMBER}-*.md"
+              echo "_No test plan wiki page found for PR #${PR_NUMBER}._" > /tmp/test_plan.md
+            fi
+          } || {
+            echo "Wiki clone failed (wiki may not exist yet)."
             echo "_No test plan wiki page found for PR #${PR_NUMBER}._" > /tmp/test_plan.md
-          fi
+          }
 
-          echo "plan_found=${HTTP_STATUS}" >> "$GITHUB_OUTPUT"
+          echo "plan_found=done" >> "$GITHUB_OUTPUT"
 
       - name: Collect PR diff
         id: diff
@@ -112,25 +119,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Write to file first; Node.js reads from disk directly (avoids GITHUB_ENV multiline issues).
           curl -s \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3.diff" \
             "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}" \
-            -o /tmp/pr_diff.patch
+            | head -c 65536 > /tmp/pr_diff.patch
+
+          {
+            echo 'PR_DIFF<<__EOF__'
+            cat /tmp/pr_diff.patch
+            echo '__EOF__'
+          } >> "$GITHUB_ENV"
 
       - name: Load QA Automation Test Creator agent prompt
         run: |
           set -euo pipefail
-          # Strip YAML frontmatter and code-fence examples; write to disk.
-          # Node.js reads this file directly — no GITHUB_ENV needed.
-          awk 'BEGIN{n=0; in_fence=0}
-               /^---/{n++; next}
-               n<2{next}
-               /^```/{in_fence=!in_fence; next}
-               in_fence{next}
-               {print}' \
+          # Strip YAML frontmatter (lines between the first two --- delimiters)
+          # and export the agent body as AGENT_PROMPT for use in the next step
+          awk 'BEGIN{n=0} /^---/{n++; next} n>=2' \
             .github/agents/qa-automation-test-creator.agent.md > /tmp/agent_prompt.md
+          {
+            echo 'AGENT_PROMPT<<__EOF__'
+            cat /tmp/agent_prompt.md
+            echo '__EOF__'
+          } >> "$GITHUB_ENV"
 
       - name: Generate test files via GitHub Models
         id: generate
@@ -151,23 +163,28 @@ jobs:
           const prNumber = process.env.PR_NUMBER;
           const repoOwner = process.env.REPO_OWNER;
           const repoName = process.env.REPO_NAME;
-
-          // Read large content directly from temp files — avoids all GITHUB_ENV multiline issues.
-          const readFile = (p, fallback) => { try { return fs.readFileSync(p, 'utf8').slice(0, 6144); } catch { return fallback; } };
-          const testPlan   = readFile('/tmp/test_plan.md',   '_No test plan available._');
-          const prDiff     = readFile('/tmp/pr_diff.patch',  '_No diff available._');
-          const agentPrompt = readFile('/tmp/agent_prompt.md', '');
+          const testPlan = process.env.TEST_PLAN || '_No test plan available._';
+          const prDiff = process.env.PR_DIFF || '_No diff available._';
+          // System prompt is sourced directly from the qa-automation-test-creator agent file
+          const agentPrompt = process.env.AGENT_PROMPT || '';
 
           async function main() {
             const endpoint = 'https://models.inference.ai.azure.com';
-            // gpt-4o-mini has a 128K context window — much more headroom than gpt-4o (8K).
-            const model = 'gpt-4o-mini';
+            const model = 'gpt-4o';
 
             // Append a strict JSON output contract so the response is always parseable,
             // regardless of future changes to the agent body.
             const systemPrompt = agentPrompt + `\n\n## Workflow Output Contract\nOutput ONLY a raw JSON array (no markdown fences). Each element: { "filePath": "<path>", "content": "<full file content>" }.\nIf the test plan has no actionable tests, return an empty array [].`;
 
-            const userPrompt = `## PR #${prNumber} — QA Test Plan (from Wiki)\n${testPlan}\n\n## PR Diff (for context on source code)\n\`\`\`diff\n${prDiff}\n\`\`\`\n\nGenerate the test files now.`;
+            const userPrompt = `## PR #${prNumber} — QA Test Plan (from Wiki)
+          ${testPlan}
+
+          ## PR Diff (for context on source code)
+          \`\`\`diff
+          ${prDiff}
+          \`\`\`
+
+          Generate the test files now.`;
 
             const response = await fetch(`${endpoint}/chat/completions`, {
               method: 'POST',
@@ -182,7 +199,7 @@ jobs:
                   { role: 'user', content: userPrompt },
                 ],
                 temperature: 0.2,
-                max_tokens: 3000,
+                max_tokens: 4096,
               }),
             });
 
