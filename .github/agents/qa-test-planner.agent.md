@@ -42,45 +42,27 @@ Structure every test plan with the following distribution:
 
 ## Output Format
 
-Produce a test plan with the following structure:
+Produce a test plan using exactly this markdown structure with `##` level headers and markdown tables for every test section:
 
----
-
-### Test Plan: [Feature / Change Name]
-
-**Summary**
+## Summary
 Brief description of what changed and the testing scope.
 
----
+## Unit Tests
+| Test | Why Unit | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
 
-#### Unit Tests
-> Goal: Validate individual logic units in isolation.
+## Integration Tests
+| Test | Why Integration | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
 
-| Test Case | Description | Input / Scenario | Expected Outcome |
-|-----------|-------------|-----------------|-----------------|
-| ... | ... | ... | ... |
+## UI / E2E Tests
+| Test | Why E2E | AC | Steps |
+|---|---|---|---|
+| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
 
----
-
-#### Integration Tests
-> Goal: Validate interactions between components, services, or data layers.
-
-| Test Case | Description | Scope | Expected Outcome |
-|-----------|-------------|-------|-----------------|
-| ... | ... | ... | ... |
-
----
-
-#### UI / E2E Tests _(critical flows only)_
-> Goal: Validate end-to-end critical user journeys that cannot be covered at lower layers.
-
-| Test Case | User Flow | Why UI layer? | Expected Outcome |
-|-----------|-----------|--------------|-----------------|
-| ... | ... | ... | ... |
-
----
-
-#### Coverage Notes
+## Coverage Rationale
 - Risks or gaps in the proposed plan
 - Areas that are difficult to test and why
-- Recommendations for improving testability (e.g., refactoring for dependency injection, adding seams)
+- Recommendations for improving testability
