@@ -226,7 +226,43 @@ Rules:
 - If reviewer guidance is provided, explicitly incorporate it
 - If no issue linked, infer acceptance criteria from the PR title, description, and diff
 
-Output in this exact markdown structure:
+Output in this EXACT markdown structure. STRICT RULES:
+- Each test section header must be followed IMMEDIATELY by the table header row — no blank lines, no blockquotes, no introductory text between the `##` heading and the `|` table row.
+- Every test section MUST use a markdown table. Never use bullet points or numbered lists in test sections.
+- If no tests apply in a section, still include the table header row with a single row saying `| None | N/A | N/A | N/A |`.
+
+## Summary
+2-3 sentence overview of changes and testing strategy.
+
+## Unit Tests
+| Test | Why Unit | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
+
+## Integration Tests
+| Test | Why Integration | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
+
+## UI / E2E Tests
+| Test | Why E2E | AC | Steps |
+|---|---|---|---|
+| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
+
+## Coverage Rationale
+Overall strategy and any deliberately excluded areas.`; {
+  const agentInstructions = loadAgentInstructions();
+  if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
+
+  // Append the required output format to the agent instructions.
+  return `${agentInstructions}
+
+---
+
+Output in this EXACT markdown structure. STRICT RULES:
+- Each test section header must be followed IMMEDIATELY by the table header row — no blank lines, no blockquotes, no introductory text between the \`##\` heading and the \`|\` table row.
+- Every test section MUST use a markdown table. Never use bullet points or numbered lists in test sections.
+- If no tests apply in a section, still include the table header row with a single row saying \`| None | N/A | N/A | N/A |\`.
 
 ## Summary
 2-3 sentence overview of changes and testing strategy.
@@ -248,30 +284,6 @@ Output in this exact markdown structure:
 
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
-
-function buildSystemPrompt() {
-  const agentInstructions = loadAgentInstructions();
-  if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
-
-  // Append the required output format to the agent instructions.
-  return `${agentInstructions}
-
----
-
-Output in this exact markdown structure:
-
-## Summary
-2-3 sentence overview of changes and testing strategy.
-
-## Unit Tests
-| Test | Why Unit | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
-
-## Integration Tests
-| Test | Why Integration | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
 
 ## UI / E2E Tests
 | Test | Why E2E | AC | Steps |
@@ -424,14 +436,17 @@ function truncateLines(text, max) {
 }
 
 function countTests(markdown, section) {
-  const match = markdown.match(new RegExp(`## ${section}[\\s\\S]*?(?=\\n## |$)`));
+  // Allow for any trailing decorators on the heading line (e.g. "_(critical flows only)_")
+  const match = markdown.match(new RegExp(`## ${section}[^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`));
   if (!match) return 0;
   const content = match[0];
-  // Count table data rows only: exclude the header row and separator rows (|---|...|)
+  // Count table data rows only: exclude separator rows (|---|...|) and the header row
   const tableRows = (content.match(/^\|.+\|/gm) || [])
     .filter(row => !/^\|[\s|:\-]+\|/.test(row));  // remove separator rows
   // tableRows[0] is the header row, so subtract 1 for data rows only
-  return Math.max(0, tableRows.length - 1);
+  // Also exclude the "None" placeholder row that signals zero real tests
+  const dataRows = tableRows.slice(1).filter(row => !/^\|\s*None\s*\|/.test(row));
+  return dataRows.length;
 }
 
 function normalizeUsage(rawUsage) {
