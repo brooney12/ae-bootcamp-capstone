@@ -394,21 +394,24 @@ function countTests(markdown, section) {
 function saveToWiki(prTitle, planContent, runMeta) {
   const wikiRepo = `${GITHUB_SERVER_URL}/${REPO_OWNER}/${REPO_NAME}.wiki.git`;
   const wikiDir = '/tmp/wiki';
+  const wikiRemoteUrl = `https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')}`;
   const safeTitle = prTitle.replace(/[^a-zA-Z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
   const pageSlug = `Test-Plan-MCP-PR-${prNumber}-${safeTitle}`.slice(0, 100);
   const pageFile = `${pageSlug}.md`;
 
   execSync(`git config --global user.email "github-actions[bot]@users.noreply.github.com"`);
   execSync(`git config --global user.name "github-actions[bot]"`);
+  // Retries in the same runner can leave stale repo state in /tmp/wiki.
+  execSync(`rm -rf ${wikiDir}`);
 
   try {
-    execSync(
-      `git clone https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')} ${wikiDir}`,
-      { stdio: 'pipe' }
-    );
+    execSync(`git clone ${wikiRemoteUrl} ${wikiDir}`, { stdio: 'pipe' });
   } catch {
     execSync(`mkdir -p ${wikiDir}`);
-    execSync(`cd ${wikiDir} && git init && git remote add origin https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')}`);
+    execSync(`cd ${wikiDir} && git init`);
+    execSync(
+      `cd ${wikiDir} && (git remote get-url origin >/dev/null 2>&1 && git remote set-url origin ${wikiRemoteUrl} || git remote add origin ${wikiRemoteUrl})`
+    );
   }
 
   const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
