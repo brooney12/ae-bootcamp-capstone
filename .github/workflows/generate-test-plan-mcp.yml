@@ -54,7 +54,18 @@ jobs:
           TRIGGER_COMMENT: ${{ github.event.comment.body }}
           # Optional: set your org-specific billing assumption per premium request.
           # MCP_PREMIUM_REQUEST_COST_USD: "0.04"
-        run: node scripts/generate_test_plan_mcp.cjs
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            echo "Running MCP generator (attempt ${attempt}/2)..."
+            if node scripts/generate_test_plan_mcp.cjs; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 1 ]]; then
+              echo "Retrying once after failure (common transient cause: EPIPE from gh copilot transport)."
+            fi
+          done
+          exit 1
 
       - name: Post success reaction
         if: success()

@@ -267,37 +267,36 @@ function runCopilotMcp(prompt) {
   let usedArgs = argVariants[0];
   let result = invokeCopilotWithRetry(usedArgs);
 
-  if (result.error) {
-    throw result.error;
-  }
+  const outputFor = (spawnResult) => `${spawnResult?.stderr || ''}\n${spawnResult?.stdout || ''}`;
 
   const unknownStreamFlag = (output) =>
     /unknown option '--no-stream'|unknown option '--stream'/i.test(output || '');
 
   // Support older/newer gh copilot CLI variants that disagree on stream flags.
-  if (result.status !== 0 && unknownStreamFlag(`${result.stderr || ''}\n${result.stdout || ''}`)) {
+  if (result.status !== 0 && unknownStreamFlag(outputFor(result))) {
     for (let i = 1; i < argVariants.length; i += 1) {
       usedArgs = argVariants[i];
       result = invokeCopilotWithRetry(usedArgs);
-      if (result.error) {
-        throw result.error;
-      }
-      if (result.status === 0 || !unknownStreamFlag(`${result.stderr || ''}\n${result.stdout || ''}`)) {
+      if (result.status === 0 || !unknownStreamFlag(outputFor(result))) {
         break;
       }
     }
   }
-  const combinedOutput = `${result.stderr || ''}\n${result.stdout || ''}`;
+  const combinedOutput = outputFor(result);
   const installedDuringRun = combinedOutput.includes('Copilot CLI installed successfully');
 
   // Fresh GitHub-hosted runners may install Copilot on first invocation and exit non-zero.
   if (result.status !== 0 && installedDuringRun) {
     result = invokeCopilotWithRetry(usedArgs);
-    if (result.error) {
-      throw result.error;
-    }
   }
-  if (result.status !== 0) {
+  const failedWithEpipe = isEpipeFailure(result);
+  const failedWithoutEpipe = Boolean(result.error) && !failedWithEpipe;
+
+  if (failedWithoutEpipe) {
+    throw result.error;
+  }
+
+  if (result.status !== 0 || failedWithEpipe) {
     const stderr = result.stderr || '';
     const stdout = result.stdout || '';
     const combined = `${stderr}\n${stdout}`;
@@ -354,6 +353,18 @@ function runCopilotMcp(prompt) {
         ].join(' ')
       );
     }
+
+    if (failedWithEpipe) {
+      throw new Error(
+        [
+          'gh copilot failed with EPIPE after retries.',
+          `Args used: ${usedArgs.join(' ')}`,
+          'This is usually a transient runner pipe/transport issue. Retry the workflow run.',
+          `Raw output: ${stderr || stdout || (result.error && result.error.message) || 'none'}`,
+        ].join(' ')
+      );
+    }
+
     throw new Error(
       `gh copilot exited with code ${result.status} (args: ${usedArgs.join(' ')}): ${stderr || stdout}`
     );
