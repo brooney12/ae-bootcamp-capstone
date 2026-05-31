@@ -175,7 +175,9 @@ jobs:
             // gpt-4o-mini has a 128K context window vs gpt-4o's 8K limit on the free tier.
             const model = 'gpt-4o-mini';
 
-            const systemPrompt = agentPrompt + `\n\n## Workflow Output Contract\nOutput ONLY a raw JSON array (no markdown fences). Each element: { "filePath": "<path>", "content": "<full file content>" }.\nIf the test plan has no actionable tests, return an empty array [].`;
+            // Use a delimiter format instead of JSON — avoids all JSON-escaping issues
+            // with code content (backslashes, template literals, regex, etc.)
+            const systemPrompt = agentPrompt + `\n\n## Workflow Output Contract\nDo NOT output JSON. Output each file using this exact delimiter format:\n\n<<<FILE: path/to/file.ext>>>\n<full raw file content here>\n<<<END FILE>>>\n\nRepeat for every file. No other text before, between, or after the blocks.\nIf the test plan has no actionable tests, output exactly: NO_TESTS`;
 
             const userPrompt = `## PR #${prNumber} — QA Test Plan (from Wiki)\n${testPlan}\n\n## PR Diff (for context on source code)\n\`\`\`diff\n${prDiff}\n\`\`\`\n\nGenerate the test files now.`;
 
@@ -204,19 +206,23 @@ jobs:
             const data = await response.json();
             const raw = data.choices[0].message.content.trim();
 
-            let files;
-            try {
-              files = JSON.parse(raw);
-            } catch {
-              // Try to extract JSON array if the model wrapped it
-              const match = raw.match(/\[[\s\S]*\]/);
-              if (!match) throw new Error('Could not parse model output as JSON array');
-              files = JSON.parse(match[0]);
-            }
-
-            if (!Array.isArray(files) || files.length === 0) {
+            if (raw === 'NO_TESTS' || raw === '') {
               console.log('No test files to write.');
               fs.writeFileSync('/tmp/test_summary.md', '_No test files were generated (test plan may be empty)._\n');
+              return;
+            }
+
+            // Parse delimiter format: <<<FILE: path>>>\ncontent\n<<<END FILE>>>
+            const filePattern = /<<<FILE:\s*(.+?)>>>([\s\S]*?)<<<END FILE>>>/g;
+            const files = [];
+            let m;
+            while ((m = filePattern.exec(raw)) !== null) {
+              files.push({ filePath: m[1].trim(), content: m[2].replace(/^\n/, '') });
+            }
+
+            if (files.length === 0) {
+              console.log('No file blocks found in model output. Raw output:\n' + raw.slice(0, 500));
+              fs.writeFileSync('/tmp/test_summary.md', '_No test files were generated (model output could not be parsed)._\n');
               return;
             }
 
