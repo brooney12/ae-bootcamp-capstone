@@ -100,12 +100,11 @@ jobs:
             echo "_No test plan wiki page found for PR #${PR_NUMBER}._" > /tmp/test_plan.md
           fi
 
-          # Truncate to 6 KB — avoids broken-pipe (curl exit 23) under pipefail
-          # by truncating an already-written file instead of piping through head.
-          truncate -s 6144 /tmp/test_plan.md 2>/dev/null || true
+          # head -c reading from a file (not a pipe) is safe under pipefail and
+          # never pads small files with null bytes the way truncate -s would.
           {
             echo 'TEST_PLAN<<__EOF__'
-            cat /tmp/test_plan.md
+            head -c 6144 /tmp/test_plan.md
             echo '__EOF__'
           } >> "$GITHUB_ENV"
 
@@ -121,17 +120,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Download to file first, then truncate — avoids broken-pipe (curl exit 23) under pipefail.
+          # Write to file first, then read with head -c (file read, not pipe — avoids SIGPIPE/exit 23).
           curl -s \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3.diff" \
             "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}" \
             -o /tmp/pr_diff.patch
-          truncate -s 6144 /tmp/pr_diff.patch 2>/dev/null || true
 
           {
             echo 'PR_DIFF<<__EOF__'
-            cat /tmp/pr_diff.patch
+            head -c 6144 /tmp/pr_diff.patch
             echo '__EOF__'
           } >> "$GITHUB_ENV"
 
