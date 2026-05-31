@@ -8,6 +8,8 @@ const API_URL =
   `?latitude=${LATITUDE}&longitude=${LONGITUDE}` +
   `&current=temperature_2m,relative_humidity_2m,apparent_temperature,` +
   `precipitation,weather_code,wind_speed_10m,is_day` +
+  `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum` +
+  `&forecast_days=7` +
   `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FChicago`
 
 function getWeatherInfo(code, isDay) {
@@ -51,8 +53,21 @@ function formatDate(dateStr) {
   })
 }
 
+function formatDayShort(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  const today = new Date()
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  if (isToday) return 'Today'
+  return date.toLocaleDateString('en-US', { weekday: 'short' })
+}
+
 function App() {
   const [weather, setWeather] = useState(null)
+  const [daily, setDaily] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -64,6 +79,7 @@ function App() {
       })
       .then((data) => {
         setWeather(data.current)
+        setDaily(data.daily)
         setLoading(false)
       })
       .catch((err) => {
@@ -92,6 +108,7 @@ function App() {
 
   return (
     <div className="weather-app">
+      <div className="weather-container">
       <div className="weather-card">
         <div className="location">
           <span className="pin">📍</span>
@@ -127,6 +144,27 @@ function App() {
             <span className="detail-value">{weather.precipitation} in</span>
           </div>
         </div>
+      </div>
+
+      {daily && (
+        <div className="weekly-forecast">
+          <h2 className="weekly-title">This Week</h2>
+          <div className="weekly-days">
+            {daily.time.map((dateStr, i) => {
+              const { icon: dayIcon } = getWeatherInfo(daily.weather_code[i], true)
+              return (
+                <div key={dateStr} className="day-card">
+                  <span className="day-name">{formatDayShort(dateStr)}</span>
+                  <span className="day-icon">{dayIcon}</span>
+                  <span className="day-high">{Math.round(daily.temperature_2m_max[i])}°</span>
+                  <span className="day-low">{Math.round(daily.temperature_2m_min[i])}°</span>
+                  <span className="day-precip">💧 {daily.precipitation_sum[i].toFixed(2)}"</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
       </div>
     </div>
   )
