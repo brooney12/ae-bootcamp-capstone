@@ -100,12 +100,12 @@ jobs:
             echo "_No test plan wiki page found for PR #${PR_NUMBER}._" > /tmp/test_plan.md
           fi
 
-          # head -c reading from a file (not a pipe) is safe under pipefail and
-          # never pads small files with null bytes the way truncate -s would.
+          # Use a random delimiter so file content can never collide with it.
+          _DELIM="$(openssl rand -hex 16)"
           {
-            echo 'TEST_PLAN<<__EOF__'
+            echo "TEST_PLAN<<${_DELIM}"
             head -c 6144 /tmp/test_plan.md
-            echo '__EOF__'
+            echo "${_DELIM}"
           } >> "$GITHUB_ENV"
 
           echo "plan_found=${HTTP_STATUS}" >> "$GITHUB_OUTPUT"
@@ -120,17 +120,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Write to file first, then read with head -c (file read, not pipe — avoids SIGPIPE/exit 23).
+          # Write to file first, then read with head -c (avoids SIGPIPE/exit 23).
           curl -s \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3.diff" \
             "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}" \
             -o /tmp/pr_diff.patch
 
+          _DELIM="$(openssl rand -hex 16)"
           {
-            echo 'PR_DIFF<<__EOF__'
+            echo "PR_DIFF<<${_DELIM}"
             head -c 6144 /tmp/pr_diff.patch
-            echo '__EOF__'
+            echo "${_DELIM}"
           } >> "$GITHUB_ENV"
 
       - name: Load QA Automation Test Creator agent prompt
@@ -138,12 +139,19 @@ jobs:
           set -euo pipefail
           # Strip YAML frontmatter (lines between the first two --- delimiters)
           # and export the agent body as AGENT_PROMPT for use in the next step
-          awk 'BEGIN{n=0} /^---/{n++; next} n>=2' \
+          awk 'BEGIN{n=0; in_fence=0}
+               /^---/{n++; next}
+               n<2{next}
+               /^```/{in_fence=!in_fence; next}
+               in_fence{next}
+               {print}' \
             .github/agents/qa-automation-test-creator.agent.md > /tmp/agent_prompt.md
+
+          _DELIM="$(openssl rand -hex 16)"
           {
-            echo 'AGENT_PROMPT<<__EOF__'
+            echo "AGENT_PROMPT<<${_DELIM}"
             cat /tmp/agent_prompt.md
-            echo '__EOF__'
+            echo "${_DELIM}"
           } >> "$GITHUB_ENV"
 
       - name: Generate test files via GitHub Models
