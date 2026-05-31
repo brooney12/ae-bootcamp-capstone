@@ -437,6 +437,16 @@ function formatUsd(amount) {
   return `$${amount.toFixed(4)}`;
 }
 
+// ─── Post-process model output ────────────────────────────────────────────────
+// Normalize the raw LLM output so section headings and tables are always
+// properly separated regardless of how the model chose to format them.
+function normalizePlanContent(content) {
+  return content
+    .replace(/\r\n/g, '\n')                        // normalize line endings
+    .replace(/([^\n])(## )/g, '$1\n\n$2')           // ensure blank line before every ## heading
+    .replace(/(## [^|\n]+)\n?(\|)/g, '$1\n$2');    // ensure heading and table are on separate lines
+}
+
 function estimateCost(usage) {
   const hasUsage = usage.promptTokens !== null && usage.completionTokens !== null;
   const hasPricing = Number.isFinite(INPUT_COST_PER_1M) && Number.isFinite(OUTPUT_COST_PER_1M);
@@ -497,7 +507,7 @@ async function main() {
   }
   const userPrompt = buildUserPrompt(pr, files, issue, reviewerGuidance);
   const modelResponse = await callGitHubModels(SYSTEM_PROMPT, userPrompt);
-  const testPlan = modelResponse.text;
+  const testPlan = normalizePlanContent(modelResponse.text);
   const usage = normalizeUsage(modelResponse.usage);
   const cost = estimateCost(usage);
 
