@@ -9,6 +9,8 @@
  */
 
 const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const https = require('https');
 
 // ─── Config from environment ──────────────────────────────────────────────────
@@ -197,7 +199,19 @@ function callGitHubModels(systemPrompt, userPrompt) {
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a senior QA engineer and test architect. Generate precise, actionable test plans from pull request context and GitHub issue acceptance criteria.
+function loadAgentInstructions() {
+  const agentPath = path.resolve(__dirname, '..', '.github', 'agents', 'qa-test-planner.agent.md');
+  try {
+    const raw = fs.readFileSync(agentPath, 'utf8');
+    // Strip YAML frontmatter (--- ... ---) so only the instruction body is used.
+    return raw.replace(/^---[\s\S]*?---\s*/m, '').trim();
+  } catch (err) {
+    console.warn(`Could not load qa-test-planner agent instructions: ${err.message}. Falling back to built-in system prompt.`);
+    return null;
+  }
+}
+
+const FALLBACK_SYSTEM_PROMPT = `You are a senior QA engineer and test architect. Generate precise, actionable test plans from pull request context and GitHub issue acceptance criteria.
 
 Follow the test pyramid:
 - **Unit tests (~70%)**: Pure functions, business logic, edge cases, error handling, isolated components
@@ -240,6 +254,47 @@ Output in this exact markdown structure:
 
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
+
+function buildSystemPrompt() {
+  const agentInstructions = loadAgentInstructions();
+  if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
+
+  // Append the required output format to the agent instructions.
+  return `${agentInstructions}
+
+---
+
+Output in this exact markdown structure:
+
+## Summary
+2-3 sentence overview of changes and testing strategy.
+
+## Unit Tests
+### [Area]
+- **Test**: [What]
+  - **Why unit**: [Reason]
+  - **AC**: [Which criterion]
+  - **Scenario**: [Happy/edge/error]
+
+## Integration Tests
+### [Area]
+- **Test**: [What]
+  - **Why integration**: [Reason]
+  - **AC**: [Which criterion]
+  - **Scenario**: [What to validate]
+
+## UI / E2E Tests
+### [Critical workflow]
+- **Test**: [What]
+  - **Why E2E**: [Why not testable lower]
+  - **AC**: [Which criterion]
+  - **Steps**: [Brief outline]
+
+## Coverage Rationale
+Overall strategy and any deliberately excluded areas.`;
+}
+
+const SYSTEM_PROMPT = buildSystemPrompt();
 
 function buildUserPrompt(pr, files, issue, reviewerGuidance) {
   const issueSection = issue
@@ -304,7 +359,6 @@ function saveToWiki(prNumber, prTitle, content, usage, cost) {
     execSync(`cd ${wikiDir} && git init && git remote add origin https://x-access-token:${GITHUB_TOKEN}@${wikiRepo.replace('https://', '')}`);
   }
 
-  const fs = require('fs');
   const fullContent = buildWikiPage(prNumber, prTitle, content, usage, cost);
   fs.writeFileSync(`${wikiDir}/${pageFile}`, fullContent);
 
@@ -351,7 +405,6 @@ ${planContent}
 }
 
 function updateWikiIndex(wikiDir, prNumber, prTitle, pageSlug) {
-  const fs = require('fs');
   const indexPath = `${wikiDir}/QA-Test-Plans.md`;
   const now = new Date().toISOString().slice(0, 10);
   const newRow = `| [#${prNumber}](${pageSlug}) | ${prTitle} | ${now} | @${TRIGGERED_BY || 'unknown'} |`;
