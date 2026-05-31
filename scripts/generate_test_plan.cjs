@@ -436,7 +436,8 @@ function truncateLines(text, max) {
 }
 
 function countTests(markdown, section) {
-  const match = markdown.match(new RegExp(`## ${section}[\\s\\S]*?(?=\\n## |$)`));
+  // Support both ## and #### section headings
+  const match = markdown.match(new RegExp(`#{2,4} ${section}[\\s\\S]*?(?=\\n## |\\n#### |$)`));
   if (!match) return 0;
   const content = match[0];
   // Bullet-style: top-level "- **Test..." items.
