@@ -438,7 +438,16 @@ function truncateLines(text, max) {
 function countTests(markdown, section) {
   const match = markdown.match(new RegExp(`## ${section}[\\s\\S]*?(?=\\n## |$)`));
   if (!match) return 0;
-  return (match[0].match(/^- \*\*Test\*\*/gm) || []).length;
+  const content = match[0];
+  // Bullet-style: top-level "- **Test..." items.
+  // Matches **Test**:, **Test:**, **Test Case**: and other variants the model produces.
+  // No leading \s* so indented sub-items like "  - **Why unit**:" are not counted.
+  const bulletCount = (content.match(/^- \*\*Test/gm) || []).length;
+  if (bulletCount > 0) return bulletCount;
+  // Table-style fallback: count data rows, excluding separator rows and the header row
+  const tableRows = (content.match(/^\|.+\|/gm) || [])
+    .filter(row => !/^\|[\s|:\-]+\|/.test(row));
+  return Math.max(0, tableRows.length - 1);
 }
 
 function normalizeUsage(rawUsage) {
