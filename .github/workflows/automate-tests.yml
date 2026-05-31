@@ -163,28 +163,21 @@ jobs:
           const prNumber = process.env.PR_NUMBER;
           const repoOwner = process.env.REPO_OWNER;
           const repoName = process.env.REPO_NAME;
-          const testPlan = process.env.TEST_PLAN || '_No test plan available._';
-          const prDiff = process.env.PR_DIFF || '_No diff available._';
-          // System prompt is sourced directly from the qa-automation-test-creator agent file
-          const agentPrompt = process.env.AGENT_PROMPT || '';
+
+          // Read large content directly from temp files — avoids all GITHUB_ENV multiline issues.
+          const readFile = (p, fallback) => { try { return fs.readFileSync(p, 'utf8').slice(0, 6144); } catch { return fallback; } };
+          const testPlan    = readFile('/tmp/test_plan.md',   '_No test plan available._');
+          const prDiff      = readFile('/tmp/pr_diff.patch',  '_No diff available._');
+          const agentPrompt = readFile('/tmp/agent_prompt.md', '');
 
           async function main() {
             const endpoint = 'https://models.inference.ai.azure.com';
-            const model = 'gpt-4o';
+            // gpt-4o-mini has a 128K context window vs gpt-4o's 8K limit on the free tier.
+            const model = 'gpt-4o-mini';
 
-            // Append a strict JSON output contract so the response is always parseable,
-            // regardless of future changes to the agent body.
             const systemPrompt = agentPrompt + `\n\n## Workflow Output Contract\nOutput ONLY a raw JSON array (no markdown fences). Each element: { "filePath": "<path>", "content": "<full file content>" }.\nIf the test plan has no actionable tests, return an empty array [].`;
 
-            const userPrompt = `## PR #${prNumber} — QA Test Plan (from Wiki)
-          ${testPlan}
-
-          ## PR Diff (for context on source code)
-          \`\`\`diff
-          ${prDiff}
-          \`\`\`
-
-          Generate the test files now.`;
+            const userPrompt = `## PR #${prNumber} — QA Test Plan (from Wiki)\n${testPlan}\n\n## PR Diff (for context on source code)\n\`\`\`diff\n${prDiff}\n\`\`\`\n\nGenerate the test files now.`;
 
             const response = await fetch(`${endpoint}/chat/completions`, {
               method: 'POST',
@@ -199,7 +192,7 @@ jobs:
                   { role: 'user', content: userPrompt },
                 ],
                 temperature: 0.2,
-                max_tokens: 4096,
+                max_tokens: 3000,
               }),
             });
 
@@ -290,7 +283,7 @@ jobs:
                 `### Files created`,
                 fileList,
                 ``,
-                `> Powered by GitHub Models · gpt-4o`,
+                `> Powered by GitHub Models · gpt-4o-mini`,
               ].join('\n'),
             });
 
@@ -309,7 +302,7 @@ jobs:
               `|------|--------|`,
               rows,
               ``,
-              `> Generated from the [wiki test plan](../../wiki/Test-Plan-PR-${prNumber}) · Powered by GitHub Models gpt-4o`,
+              `> Generated from the [wiki test plan](../../wiki/Test-Plan-PR-${prNumber}) · Powered by GitHub Models gpt-4o-mini`,
             ].join('\n');
             require('fs').writeFileSync('/tmp/test_summary.md', summary, 'utf8');
 
