@@ -40,7 +40,16 @@ if (typeof COPILOT_TOKEN === 'string' && COPILOT_TOKEN.startsWith('ghp_')) {
   process.exit(1);
 }
 
-function ghRequest(method, path, body = null) {
+const TRANSIENT_ERRORS = new Set(['EPIPE', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND']);
+
+function isTransientNetworkError(err) {
+  if (!err) return false;
+  if (TRANSIENT_ERRORS.has(err.code)) return true;
+  const msg = (err.message || '').toLowerCase();
+  return msg.includes('socket hang up') || msg.includes('write epipe') || msg.includes('econnreset');
+}
+
+function ghRequestOnce(method, path, body = null) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: GH_API,
@@ -78,7 +87,24 @@ function ghRequest(method, path, body = null) {
   });
 }
 
+async function ghRequest(method, path, body = null, maxAttempts = 4) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await ghRequestOnce(method, path, body);
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientNetworkError(err) || attempt >= maxAttempts) throw err;
+      const delayMs = 1000 * attempt;
+      console.warn(`GitHub API ${method} ${path} failed (${err.message}) — retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})...`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchPR() {
+  console.log(`Fetching PR #${prNumber}...`);
   return ghRequest('GET', `/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${prNumber}`);
 }
 
