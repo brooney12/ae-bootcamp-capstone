@@ -42,27 +42,4 @@ Structure every test plan with the following distribution:
 
 ## Output Format
 
-Produce a test plan using exactly this markdown structure with `##` level headers and markdown tables for every test section:
-
-## Summary
-Brief description of what changed and the testing scope.
-
-## Unit Tests
-| Test | Why Unit | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
-
-## Integration Tests
-| Test | Why Integration | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
-
-## UI / E2E Tests
-| Test | Why E2E | AC | Steps |
-|---|---|---|---|
-| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
-
-## Coverage Rationale
-- Risks or gaps in the proposed plan
-- Areas that are difficult to test and why
-- Recommendations for improving testability
+The workflow script will append the exact output format. Follow it precisely — use `##` level section headers and a markdown table for every test section (Unit Tests, Integration Tests, UI / E2E Tests). Do not use bullet lists or sub-headers inside test sections.
