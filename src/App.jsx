@@ -8,6 +8,7 @@ const API_URL =
   `?latitude=${LATITUDE}&longitude=${LONGITUDE}` +
   `&current=temperature_2m,relative_humidity_2m,apparent_temperature,` +
   `precipitation,weather_code,wind_speed_10m,is_day` +
+  `&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum` +
   `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%2FChicago`
 
 function getWeatherInfo(code, isDay) {
@@ -51,8 +52,21 @@ function formatDate(dateStr) {
   })
 }
 
+function formatDayShort(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  const today = new Date()
+  const isToday =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  if (isToday) return 'Today'
+  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
 function App() {
   const [weather, setWeather] = useState(null)
+  const [weekly, setWeekly] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -64,6 +78,7 @@ function App() {
       })
       .then((data) => {
         setWeather(data.current)
+        setWeekly(data.daily)
         setLoading(false)
       })
       .catch((err) => {
@@ -126,6 +141,29 @@ function App() {
             <span className="detail-label">Precipitation</span>
             <span className="detail-value">{weather.precipitation} in</span>
           </div>
+        </div>
+      </div>
+
+      <div className="weekly-card">
+        <h2 className="weekly-title">This Week in Minneapolis, MN</h2>
+        <div className="weekly-list">
+          {weekly.time.map((dateStr, i) => {
+            const { icon } = getWeatherInfo(weekly.weather_code[i], true)
+            return (
+              <div key={dateStr} className="weekly-row">
+                <span className="weekly-day">{formatDayShort(dateStr)}</span>
+                <span className="weekly-icon">{icon}</span>
+                <span className="weekly-temps">
+                  <span className="weekly-high">{Math.round(weekly.temperature_2m_max[i])}°</span>
+                  <span className="weekly-sep">/</span>
+                  <span className="weekly-low">{Math.round(weekly.temperature_2m_min[i])}°</span>
+                </span>
+                <span className="weekly-precip">
+                  🌧️ {weekly.precipitation_sum[i].toFixed(2)} in
+                </span>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
