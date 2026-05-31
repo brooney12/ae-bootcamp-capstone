@@ -20,6 +20,11 @@ if (!GITHUB_TOKEN || !PR_NUMBER || !REPO_OWNER || !REPO_NAME) {
   process.exit(1);
 }
 
+// Prevent a broken runner stdout/stderr pipe from crashing the process with
+// a raw 'write EPIPE' before our own error handling can run.
+process.stdout.on('error', (err) => { if (err.code === 'EPIPE') process.exit(1); });
+process.stderr.on('error', (err) => { if (err.code === 'EPIPE') process.exit(1); });
+
 const GH_API = 'api.github.com';
 const prNumber = parseInt(PR_NUMBER, 10);
 const premiumRequestUnitCost = Number(MCP_PREMIUM_REQUEST_COST_USD);
@@ -227,8 +232,33 @@ function runCopilotMcp(prompt) {
         ...process.env,
         GH_TOKEN: copilotAuthToken,
         GITHUB_TOKEN: copilotAuthToken,
+        // Prevent gh from piping output through a pager (e.g. `less`) in CI.
+        // A pager that exits before gh finishes writing is the primary cause of
+        // 'write EPIPE' in non-interactive GitHub Actions runners.
+        GH_PAGER: 'cat',
+        PAGER: 'cat',
+        NO_COLOR: '1',
+        GH_NO_PROMPT: '1',
+        TERM: 'dumb',
+        CI: 'true',
       },
     });
+
+  const parsePlainCopilotOutput = (rawOutput) => {
+    const text = (rawOutput || '').trim();
+    if (!text) {
+      throw new Error('gh copilot plain-text fallback produced no output.');
+    }
+
+    return {
+      testPlan: text,
+      model: MCP_MODEL,
+      outputTokens: null,
+      premiumRequests: null,
+      totalApiDurationMs: null,
+      sessionDurationMs: null,
+    };
+  };
 
   const isEpipeFailure = (result) => {
     const errorText = [
@@ -355,12 +385,43 @@ function runCopilotMcp(prompt) {
     }
 
     if (failedWithEpipe) {
+      console.warn('gh copilot JSON mode failed with EPIPE; attempting plain-text MCP fallback.');
+
+      const plainArgs = [
+        'copilot',
+        '--',
+        '-p',
+        prompt,
+        '--allow-all-tools',
+        '--enable-all-github-mcp-tools',
+        '--model',
+        MCP_MODEL,
+      ];
+
+      const plainResult = invokeCopilotWithRetry(plainArgs, 2);
+      if (!plainResult.error && plainResult.status === 0) {
+        return parsePlainCopilotOutput(plainResult.stdout || '');
+      }
+
+      const plainCombined = `${plainResult.stderr || ''}\n${plainResult.stdout || ''}`;
+
+      try {
+        const recovered = parseCopilotJsonl(plainCombined);
+        if (recovered.testPlan) {
+          return recovered;
+        }
+      } catch {
+        // Fall through to hard failure below.
+      }
+
       throw new Error(
         [
-          'gh copilot failed with EPIPE after retries.',
-          `Args used: ${usedArgs.join(' ')}`,
-          'This is usually a transient runner pipe/transport issue. Retry the workflow run.',
+          'gh copilot failed with EPIPE after retries in both JSON and plain-text modes.',
+          `JSON args: ${usedArgs.join(' ')}`,
+          `Plain args: ${plainArgs.join(' ')}`,
+          'This usually indicates a runner transport issue or gh copilot instability in non-interactive CI.',
           `Raw output: ${stderr || stdout || (result.error && result.error.message) || 'none'}`,
+          `Plain fallback output: ${plainCombined || (plainResult.error && plainResult.error.message) || 'none'}`,
         ].join(' ')
       );
     }
