@@ -232,25 +232,19 @@ Output in this exact markdown structure:
 2-3 sentence overview of changes and testing strategy.
 
 ## Unit Tests
-### [Area]
-- **Test**: [What]
-  - **Why unit**: [Reason]
-  - **AC**: [Which criterion]
-  - **Scenario**: [Happy/edge/error]
+| Test | Why Unit | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
 
 ## Integration Tests
-### [Area]
-- **Test**: [What]
-  - **Why integration**: [Reason]
-  - **AC**: [Which criterion]
-  - **Scenario**: [What to validate]
+| Test | Why Integration | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
 
 ## UI / E2E Tests
-### [Critical workflow]
-- **Test**: [What]
-  - **Why E2E**: [Why not testable lower]
-  - **AC**: [Which criterion]
-  - **Steps**: [Brief outline]
+| Test | Why E2E | AC | Steps |
+|---|---|---|---|
+| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
 
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
@@ -270,25 +264,19 @@ Output in this exact markdown structure:
 2-3 sentence overview of changes and testing strategy.
 
 ## Unit Tests
-### [Area]
-- **Test**: [What]
-  - **Why unit**: [Reason]
-  - **AC**: [Which criterion]
-  - **Scenario**: [Happy/edge/error]
+| Test | Why Unit | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
 
 ## Integration Tests
-### [Area]
-- **Test**: [What]
-  - **Why integration**: [Reason]
-  - **AC**: [Which criterion]
-  - **Scenario**: [What to validate]
+| Test | Why Integration | AC | Scenario |
+|---|---|---|---|
+| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
 
 ## UI / E2E Tests
-### [Critical workflow]
-- **Test**: [What]
-  - **Why E2E**: [Why not testable lower]
-  - **AC**: [Which criterion]
-  - **Steps**: [Brief outline]
+| Test | Why E2E | AC | Steps |
+|---|---|---|---|
+| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
 
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
