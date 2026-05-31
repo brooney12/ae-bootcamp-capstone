@@ -444,7 +444,15 @@ function normalizePlanContent(content) {
   return content
     .replace(/\r\n/g, '\n')                        // normalize line endings
     .replace(/([^\n])(## )/g, '$1\n\n$2')           // ensure blank line before every ## heading
-    .replace(/(## [^|\n]+)\n?(\|)/g, '$1\n$2');    // ensure heading and table are on separate lines
+    .replace(/(## [^|\n]+)\n?(\|)/g, '$1\n$2')     // ensure heading and table are on separate lines
+    // Strip any prose or bullet points the model inserts between a test section
+    // heading and its markdown table — GitHub wiki won't render a table that
+    // is not separated from preceding paragraph text by a blank line, and the
+    // intent is always for the table to begin immediately after the heading.
+    .replace(
+      /(## (?:Unit Tests|Integration Tests|UI \/ E2E Tests)[^\n]*)\n+((?:[^|\n][^\n]*\n+)+)/g,
+      '$1\n'
+    );
 }
 
 function estimateCost(usage) {
