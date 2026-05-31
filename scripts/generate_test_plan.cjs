@@ -226,10 +226,12 @@ Rules:
 - If reviewer guidance is provided, explicitly incorporate it
 - If no issue linked, infer acceptance criteria from the PR title, description, and diff
 
-Output in this EXACT markdown structure. STRICT RULES:
-- Each test section header must be followed IMMEDIATELY by the table header row - no blank lines, no blockquotes, no introductory text between the ## heading and the table row.
-- Every test section MUST use a markdown table. Never use bullet points or numbered lists in test sections.
-- If no tests apply in a section, still include the table header row with a single row saying | None | N/A | N/A | N/A |.
+Output using this EXACT markdown structure. RULES:
+- Use exactly the section headings shown below (## Summary, ## Unit Tests, ## Integration Tests, ## UI / E2E Tests, ## Coverage Rationale).
+- In each test section, the FIRST line after the heading must be the table header row starting with |. Do NOT add any prose, blockquotes, or blank lines between the ## heading and the | table header.
+- The separator row must have exactly 4 columns: |---|---|---|---|
+- Every test row must have exactly 4 pipe-delimited columns.
+- Never use bullet points inside test sections.
 
 ## Summary
 2-3 sentence overview of changes and testing strategy.
@@ -237,12 +239,12 @@ Output in this EXACT markdown structure. STRICT RULES:
 ## Unit Tests
 | Test | Why Unit | AC | Scenario |
 |---|---|---|---|
-| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
+| [What to test] | [Why unit tier] | [Which criterion] | [Happy / edge / error] |
 
 ## Integration Tests
 | Test | Why Integration | AC | Scenario |
 |---|---|---|---|
-| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
+| [What to test] | [Why integration tier] | [Which criterion] | [What to validate] |
 
 ## UI / E2E Tests
 | Test | Why E2E | AC | Steps |
@@ -257,35 +259,7 @@ function buildSystemPrompt() {
   if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
 
   // Append the required output format to the agent instructions.
-  return `${agentInstructions}
-
----
-
-Output in this EXACT markdown structure. STRICT RULES:
-- Each test section header must be followed IMMEDIATELY by the table header row — no blank lines, no blockquotes, no introductory text between the \`##\` heading and the \`|\` table row.
-- Every test section MUST use a markdown table. Never use bullet points or numbered lists in test sections.
-- If no tests apply in a section, still include the table header row with a single row saying \`| None | N/A | N/A | N/A |\`.
-
-## Summary
-2-3 sentence overview of changes and testing strategy.
-
-## Unit Tests
-| Test | Why Unit | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at unit tier] | [Which criterion] | [Happy / edge / error] |
-
-## Integration Tests
-| Test | Why Integration | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why this belongs at integration tier] | [Which criterion] | [What to validate] |
-
-## UI / E2E Tests
-| Test | Why E2E | AC | Steps |
-|---|---|---|---|
-| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
-
-## Coverage Rationale
-Overall strategy and any deliberately excluded areas.`;
+  return `${agentInstructions}\n\n---\n\nOutput using this EXACT markdown structure. RULES:\n- Use exactly the section headings shown below (## Summary, ## Unit Tests, ## Integration Tests, ## UI / E2E Tests, ## Coverage Rationale).\n- In each test section, the FIRST line after the heading must be the table header row starting with |. Do NOT add any prose, blockquotes, or blank lines between the ## heading and the | table header.\n- The separator row must have exactly 4 columns: |---|---|---|---|\n- Every test row must have exactly 4 pipe-delimited columns.\n- Never use bullet points inside test sections.\n\n## Summary\n2-3 sentence overview of changes and testing strategy.\n\n## Unit Tests\n| Test | Why Unit | AC | Scenario |\n|---|---|---|---|\n| [What to test] | [Why unit tier] | [Which criterion] | [Happy / edge / error] |\n\n## Integration Tests\n| Test | Why Integration | AC | Scenario |\n|---|---|---|---|\n| [What to test] | [Why integration tier] | [Which criterion] | [What to validate] |\n\n## UI / E2E Tests\n| Test | Why E2E | AC | Steps |\n|---|---|---|---|\n| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |\n\n## Coverage Rationale\nOverall strategy and any deliberately excluded areas.`;
 }
 
 const SYSTEM_PROMPT = buildSystemPrompt();
@@ -430,17 +404,16 @@ function truncateLines(text, max) {
 }
 
 function countTests(markdown, section) {
-  // Allow for any trailing decorators on the heading line (e.g. "_(critical flows only)_")
-  const match = markdown.match(new RegExp(`## ${section}[^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`));
+  // Escape special regex characters in the section name (e.g. "/" in "UI / E2E Tests")
+  const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = markdown.match(new RegExp(`## ${escaped}[^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`));
   if (!match) return 0;
   const content = match[0];
-  // Count table data rows only: exclude separator rows (|---|...|) and the header row
+  // Count table data rows only: skip separator rows and the header row
   const tableRows = (content.match(/^\|.+\|/gm) || [])
-    .filter(row => !/^\|[\s|:\-]+\|/.test(row));  // remove separator rows
-  // tableRows[0] is the header row, so subtract 1 for data rows only
-  // Also exclude the "None" placeholder row that signals zero real tests
-  const dataRows = tableRows.slice(1).filter(row => !/^\|\s*None\s*\|/.test(row));
-  return dataRows.length;
+    .filter(row => !/^\|[\s|:\-]+\|/.test(row));
+  // tableRows[0] is the header; slice(1) gives data rows only
+  return tableRows.slice(1).length;
 }
 
 function normalizeUsage(rawUsage) {
