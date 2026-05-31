@@ -274,35 +274,50 @@ jobs:
             try { written = JSON.parse(fs.readFileSync('/tmp/written_files.json', 'utf8')); } catch {}
 
             const fileList = written.map(f => `- \`${f}\``).join('\n');
-
-            const { data: pr } = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `test: automated tests for PR #${prNumber}`,
-              head: testBranch,
-              base: targetBranch,
-              body: [
-                `## 🤖 Automated Tests — PR #${prNumber}`,
-                ``,
-                `This PR was generated automatically from the [wiki test plan](../../wiki/Test-Plan-PR-${prNumber}).`,
-                ``,
-                `### Files created`,
-                fileList,
-                ``,
-                `> Powered by GitHub Models · gpt-4o-mini`,
-              ].join('\n'),
-            });
-
-            core.setOutput('pr_url', pr.html_url);
-            core.setOutput('pr_number', pr.number);
-
-            // Write summary for the comment on the original PR
             const rows = written.map(f => `| \`${f}\` | ✅ Created |`).join('\n');
+
+            const prBody = [
+              `## 🤖 Automated Tests — PR #${prNumber}`,
+              ``,
+              `This PR was generated automatically from the [wiki test plan](../../wiki/Test-Plan-PR-${prNumber}).`,
+              ``,
+              `### Files created`,
+              fileList,
+              ``,
+              `> Powered by GitHub Models · gpt-4o-mini`,
+            ].join('\n');
+
+            let prUrl = null;
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `test: automated tests for PR #${prNumber}`,
+                head: testBranch,
+                base: targetBranch,
+                body: prBody,
+              });
+              prUrl = pr.html_url;
+              core.setOutput('pr_url', prUrl);
+              core.setOutput('pr_number', String(pr.number));
+            } catch (err) {
+              if (err.status === 403) {
+                core.warning('Could not auto-create PR (Actions PR creation is disabled in repo settings). ' +
+                  'Enable it under Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests".');
+              } else {
+                throw err;
+              }
+            }
+
+            // Build the summary comment for the original PR
+            const compareUrl = `${context.payload.repository.html_url}/compare/${targetBranch}...${testBranch}`;
             const summary = [
               `## 🤖 Automated Test Files Generated`,
               ``,
-              `Test files have been committed to a new branch and a pull request has been opened:`,
-              `**[test: automated tests for PR #${prNumber}](${pr.html_url})**`,
+              `Test files have been committed to branch \`${testBranch}\`.`,
+              prUrl
+                ? `A pull request has been opened: **[test: automated tests for PR #${prNumber}](${prUrl})**`
+                : `⚠️ Auto PR creation is disabled. **[Open the PR manually](${compareUrl})**`,
               ``,
               `| File | Status |`,
               `|------|--------|`,
