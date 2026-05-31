@@ -100,10 +100,12 @@ jobs:
             echo "_No test plan wiki page found for PR #${PR_NUMBER}._" > /tmp/test_plan.md
           fi
 
-          # Expose content as env var — cap at 6 KB so it fits within gpt-4o-mini's budget
+          # Truncate to 6 KB — avoids broken-pipe (curl exit 23) under pipefail
+          # by truncating an already-written file instead of piping through head.
+          truncate -s 6144 /tmp/test_plan.md 2>/dev/null || true
           {
             echo 'TEST_PLAN<<__EOF__'
-            head -c 6144 /tmp/test_plan.md
+            cat /tmp/test_plan.md
             echo '__EOF__'
           } >> "$GITHUB_ENV"
 
@@ -119,12 +121,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Cap at 6 KB — enough context for the model without blowing the token budget
+          # Download to file first, then truncate — avoids broken-pipe (curl exit 23) under pipefail.
           curl -s \
             -H "Authorization: token ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github.v3.diff" \
             "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls/${PR_NUMBER}" \
-            | head -c 6144 > /tmp/pr_diff.patch
+            -o /tmp/pr_diff.patch
+          truncate -s 6144 /tmp/pr_diff.patch 2>/dev/null || true
 
           {
             echo 'PR_DIFF<<__EOF__'
@@ -135,14 +138,9 @@ jobs:
       - name: Load QA Automation Test Creator agent prompt
         run: |
           set -euo pipefail
-          # Strip YAML frontmatter and verbose example code blocks (```...```) to keep
-          # the system prompt lean — examples add tokens without helping the model produce JSON.
-          awk 'BEGIN{n=0; in_fence=0} 
-               /^---/{n++; next} 
-               n<2{next}
-               /^```/{in_fence=!in_fence; next}
-               in_fence{next}
-               {print}' \
+          # Strip YAML frontmatter (lines between the first two --- delimiters)
+          # and export the agent body as AGENT_PROMPT for use in the next step
+          awk 'BEGIN{n=0} /^---/{n++; next} n>=2' \
             .github/agents/qa-automation-test-creator.agent.md > /tmp/agent_prompt.md
           {
             echo 'AGENT_PROMPT<<__EOF__'
@@ -176,8 +174,7 @@ jobs:
 
           async function main() {
             const endpoint = 'https://models.inference.ai.azure.com';
-            // gpt-4o-mini has a 128K context window — much more headroom than gpt-4o (8K).
-            const model = 'gpt-4o-mini';
+            const model = 'gpt-4o';
 
             // Append a strict JSON output contract so the response is always parseable,
             // regardless of future changes to the agent body.
@@ -206,7 +203,7 @@ jobs:
                   { role: 'user', content: userPrompt },
                 ],
                 temperature: 0.2,
-                max_tokens: 3000,
+                max_tokens: 4096,
               }),
             });
 
