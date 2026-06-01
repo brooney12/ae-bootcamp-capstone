@@ -411,11 +411,29 @@ function truncateLines(text, max) {
 function countTests(markdown, section) {
   // Escape special regex characters in the section name (e.g. "/" in "UI / E2E Tests")
   const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = markdown.match(new RegExp(`## ${escaped}[^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`));
-  if (!match) return 0;
-  const content = match[0];
-  // Count numbered list items (lines starting with a digit, period, and space)
-  return (content.match(/^\d+\.\s/gm) || []).length;
+  // Find the heading that introduces this section at any level (## through ######)
+  const headerMatch = markdown.match(new RegExp(`(#{2,6})[ \\t]+${escaped}`));
+  if (!headerMatch) return 0;
+  const hashes = headerMatch[1]; // e.g. "##" or "####"
+  // Capture section body up to the next heading of the same depth or end of string
+  const sectionMatch = markdown.match(
+    new RegExp(`${hashes}[ \\t]+${escaped}[^\\n]*\\n([\\s\\S]*?)(?=\\n${hashes}[^#]|$)`)
+  );
+  if (!sectionMatch) return 0;
+  const content = sectionMatch[1];
+
+  // 1. Numbered list items: "1. ..."
+  const numberedCount = (content.match(/^\d+\.\s/gm) || []).length;
+  if (numberedCount > 0) return numberedCount;
+
+  // 2. Bullet-style: "- **Test..." top-level items
+  const bulletCount = (content.match(/^- \*\*Test/gm) || []).length;
+  if (bulletCount > 0) return bulletCount;
+
+  // 3. Table-style: count data rows, excluding the header and separator rows
+  const tableRows = (content.match(/^\|.+\|/gm) || [])
+    .filter(row => !/^\|[\s|:\-]+\|/.test(row));
+  return Math.max(0, tableRows.length - 1);
 }
 
 function normalizeUsage(rawUsage) {
