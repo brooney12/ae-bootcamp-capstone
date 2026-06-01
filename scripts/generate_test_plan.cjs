@@ -228,28 +228,33 @@ Rules:
 
 Output using this EXACT markdown structure. RULES:
 - Use exactly the section headings shown below (## Summary, ## Unit Tests, ## Integration Tests, ## UI / E2E Tests, ## Coverage Rationale).
-- In each test section, the FIRST line after the heading must be the table header row starting with |. Do NOT add any prose, blockquotes, or blank lines between the ## heading and the | table header.
-- The separator row must have exactly 4 columns: |---|---|---|---|
-- Every test row must have exactly 4 pipe-delimited columns.
-- Never use bullet points inside test sections.
+- In each test section, list every test as a numbered item with a bold title, followed by indented bullet points for the details.
+- NEVER use markdown tables in test sections — use numbered lists only.
+- Do not add prose, blockquotes, or introductory sentences between the ## heading and the first numbered item.
 
 ## Summary
 2-3 sentence overview of changes and testing strategy.
 
 ## Unit Tests
-| Test | Why Unit | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why unit tier] | [Which criterion] | [Happy / edge / error] |
+
+1. **[concise test name]**
+   - Why unit: [why this belongs at the unit tier]
+   - AC: [which acceptance criterion it covers]
+   - Scenario: [happy path / edge case / error case]
 
 ## Integration Tests
-| Test | Why Integration | AC | Scenario |
-|---|---|---|---|
-| [What to test] | [Why integration tier] | [Which criterion] | [What to validate] |
+
+1. **[concise test name]**
+   - Why integration: [why this belongs at the integration tier]
+   - AC: [which acceptance criterion it covers]
+   - Scenario: [what interaction or boundary to validate]
 
 ## UI / E2E Tests
-| Test | Why E2E | AC | Steps |
-|---|---|---|---|
-| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |
+
+1. **[concise test name]**
+   - Why E2E: [why this cannot be tested at a lower layer]
+   - AC: [which acceptance criterion it covers]
+   - Steps: [brief step outline, e.g. 1. navigate → 2. act → 3. assert]
 
 ## Coverage Rationale
 Overall strategy and any deliberately excluded areas.`;
@@ -259,7 +264,7 @@ function buildSystemPrompt() {
   if (!agentInstructions) return FALLBACK_SYSTEM_PROMPT;
 
   // Append the required output format to the agent instructions.
-  return `${agentInstructions}\n\n---\n\nOutput using this EXACT markdown structure. RULES:\n- Use exactly the section headings shown below (## Summary, ## Unit Tests, ## Integration Tests, ## UI / E2E Tests, ## Coverage Rationale).\n- In each test section, the FIRST line after the heading must be the table header row starting with |. Do NOT add any prose, blockquotes, or blank lines between the ## heading and the | table header.\n- The separator row must have exactly 4 columns: |---|---|---|---|\n- Every test row must have exactly 4 pipe-delimited columns.\n- Never use bullet points inside test sections.\n\n## Summary\n2-3 sentence overview of changes and testing strategy.\n\n## Unit Tests\n| Test | Why Unit | AC | Scenario |\n|---|---|---|---|\n| [What to test] | [Why unit tier] | [Which criterion] | [Happy / edge / error] |\n\n## Integration Tests\n| Test | Why Integration | AC | Scenario |\n|---|---|---|---|\n| [What to test] | [Why integration tier] | [Which criterion] | [What to validate] |\n\n## UI / E2E Tests\n| Test | Why E2E | AC | Steps |\n|---|---|---|---|\n| [What to test] | [Why not testable lower] | [Which criterion] | [Brief step outline] |\n\n## Coverage Rationale\nOverall strategy and any deliberately excluded areas.`;
+  return `${agentInstructions}\n\n---\n\nOutput using this EXACT markdown structure. RULES:\n- Use exactly the section headings shown below (## Summary, ## Unit Tests, ## Integration Tests, ## UI / E2E Tests, ## Coverage Rationale).\n- In each test section, list every test as a numbered item with a bold title, followed by indented bullet points for the details.\n- NEVER use markdown tables in test sections — use numbered lists only.\n- Do not add prose, blockquotes, or introductory sentences between the ## heading and the first numbered item.\n\n## Summary\n2-3 sentence overview of changes and testing strategy.\n\n## Unit Tests\n\n1. **[concise test name]**\n   - Why unit: [why this belongs at the unit tier]\n   - AC: [which acceptance criterion it covers]\n   - Scenario: [happy path / edge case / error case]\n\n## Integration Tests\n\n1. **[concise test name]**\n   - Why integration: [why this belongs at the integration tier]\n   - AC: [which acceptance criterion it covers]\n   - Scenario: [what interaction or boundary to validate]\n\n## UI / E2E Tests\n\n1. **[concise test name]**\n   - Why E2E: [why this cannot be tested at a lower layer]\n   - AC: [which acceptance criterion it covers]\n   - Steps: [brief step outline, e.g. 1. navigate → 2. act → 3. assert]\n\n## Coverage Rationale\nOverall strategy and any deliberately excluded areas.`;
 }
 
 const SYSTEM_PROMPT = buildSystemPrompt();
@@ -409,11 +414,8 @@ function countTests(markdown, section) {
   const match = markdown.match(new RegExp(`## ${escaped}[^\\n]*\\n[\\s\\S]*?(?=\\n## |$)`));
   if (!match) return 0;
   const content = match[0];
-  // Count table data rows only: skip separator rows and the header row
-  const tableRows = (content.match(/^\|.+\|/gm) || [])
-    .filter(row => !/^\|[\s|:\-]+\|/.test(row));
-  // tableRows[0] is the header; slice(1) gives data rows only
-  return tableRows.slice(1).length;
+  // Count numbered list items (lines starting with a digit, period, and space)
+  return (content.match(/^\d+\.\s/gm) || []).length;
 }
 
 function normalizeUsage(rawUsage) {
@@ -438,21 +440,15 @@ function formatUsd(amount) {
 }
 
 // ─── Post-process model output ────────────────────────────────────────────────
-// Normalize the raw LLM output so section headings and tables are always
-// properly separated regardless of how the model chose to format them.
+// Normalize the raw LLM output: ensure consistent blank lines around headings
+// and collapse excessive whitespace. Numbered lists are used for test sections
+// instead of tables, so no table normalization is needed.
 function normalizePlanContent(content) {
   return content
-    .replace(/\r\n/g, '\n')                        // normalize line endings
-    .replace(/([^\n])(## )/g, '$1\n\n$2')           // ensure blank line before every ## heading
-    .replace(/(## [^|\n]+)\n?(\|)/g, '$1\n$2')     // ensure heading and table are on separate lines
-    // Strip any prose or bullet points the model inserts between a test section
-    // heading and its markdown table — GitHub wiki won't render a table that
-    // is not separated from preceding paragraph text by a blank line, and the
-    // intent is always for the table to begin immediately after the heading.
-    .replace(
-      /(## (?:Unit Tests|Integration Tests|UI \/ E2E Tests)[^\n]*)\n+((?:[^|\n][^\n]*\n+)+)/g,
-      '$1\n'
-    );
+    .replace(/\r\n/g, '\n')               // normalize line endings
+    .replace(/([^\n])(## )/g, '$1\n\n$2') // ensure blank line before every ## heading
+    .replace(/\n{3,}/g, '\n\n')           // collapse runs of 3+ blank lines
+    .trim();
 }
 
 function estimateCost(usage) {

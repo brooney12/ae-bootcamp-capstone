@@ -44,5 +44,6 @@ Structure every test plan with the following distribution:
 
 The workflow script will append the exact output format. Follow it precisely:
 - Use `##` level section headers exactly as specified.
-- Each `##` section header must be followed **immediately** by the markdown table header row — no blank lines, no blockquotes (`>`), no introductory sentences between the heading and the `|` row.
-- Every test section (Unit Tests, Integration Tests, UI / E2E Tests) MUST use a markdown table. Never use bullet points or numbered lists in test sections.
+- In each test section (Unit Tests, Integration Tests, UI / E2E Tests), list every test as a **numbered item** with a bold title, followed by indented bullet points (`- Why ...:`, `- AC:`, `- Scenario:` or `- Steps:`).
+- NEVER use markdown tables in test sections — use numbered lists only.
+- Do not add prose, blockquotes, or introductory sentences between the `##` heading and the first numbered item.
