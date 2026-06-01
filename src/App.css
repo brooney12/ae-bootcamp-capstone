@@ -111,6 +111,96 @@
   text-align: center;
 }
 
+/* Weekly forecast */
+.weather-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  max-width: 700px;
+}
+
+.weekly-forecast {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 24px;
+  padding: 28px 24px;
+  width: 100%;
+  color: #fff;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-sizing: border-box;
+}
+
+.weekly-title {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  opacity: 0.75;
+  margin: 0 0 20px;
+  text-align: center;
+}
+
+.weekly-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+.day-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 12px 4px;
+}
+
+.day-name {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  opacity: 0.8;
+  font-weight: 600;
+}
+
+.day-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.day-high {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.day-low {
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.day-precip {
+  font-size: 10px;
+  opacity: 0.7;
+  letter-spacing: 0.3px;
+}
+
+@media (max-width: 600px) {
+  .weekly-days {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 400px) {
+  .weekly-days {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 @media (max-width: 480px) {
   .weather-card {
     padding: 28px 20px;
