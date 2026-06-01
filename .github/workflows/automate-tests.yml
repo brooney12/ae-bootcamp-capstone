@@ -273,8 +273,47 @@ jobs:
             let written = [];
             try { written = JSON.parse(fs.readFileSync('/tmp/written_files.json', 'utf8')); } catch {}
 
+            // Count test cases in a file by matching `it(` / `test(` lines
+            // (excludes test.beforeEach, test.describe, test.use, etc.)
+            function countTests(filePath) {
+              try {
+                const content = fs.readFileSync(filePath, 'utf8');
+                return (content.match(/^\s*(?:it|test)\s*\(/gm) || []).length;
+              } catch { return 0; }
+            }
+
+            // Classify each file into a tier + runner
+            function classify(filePath) {
+              if (/e2e[\\/]pages[\\/]/.test(filePath))        return { tier: 'Page Object', runner: 'Playwright' };
+              if (/e2e[\\/]/.test(filePath))                   return { tier: 'E2E',         runner: 'Playwright' };
+              if (/integrat/i.test(filePath))                  return { tier: 'Integration', runner: 'Vitest' };
+              return                                                  { tier: 'Unit',         runner: 'Vitest' };
+            }
+
+            // Build per-file data
+            const fileData = written.map(f => {
+              const { tier, runner } = classify(f);
+              const count = tier === 'Page Object' ? null : countTests(f);
+              return { file: f, tier, runner, count };
+            });
+
+            // Aggregate distribution totals (skip Page Objects)
+            const totals = { Unit: 0, Integration: 0, E2E: 0 };
+            for (const { tier, count } of fileData) {
+              if (count !== null && tier in totals) totals[tier] += count;
+            }
+
             const fileList = written.map(f => `- \`${f}\``).join('\n');
-            const rows = written.map(f => `| \`${f}\` | ✅ Created |`).join('\n');
+
+            // Per-file table rows
+            const rows = fileData.map(({ file, tier, runner, count }) =>
+              `| \`${file}\` | ${count === null ? '— (Page Object)' : count} | ${runner} | ${tier} |`
+            ).join('\n');
+
+            // Distribution summary rows
+            const distRows = Object.entries(totals)
+              .map(([tier, n]) => `| ${tier} | ${n} |`)
+              .join('\n');
 
             const prBody = [
               `## 🤖 Automated Tests — PR #${prNumber}`,
@@ -319,8 +358,14 @@ jobs:
                 ? `A pull request has been opened: **[test: automated tests for PR #${prNumber}](${prUrl})**`
                 : `⚠️ Auto PR creation is disabled. **[Open the PR manually](${compareUrl})**`,
               ``,
-              `| File | Status |`,
-              `|------|--------|`,
+              `### Test distribution`,
+              `| Tier | Tests |`,
+              `|------|-------|`,
+              distRows,
+              ``,
+              `### Generated files`,
+              `| File | Tests | Runner | Tier |`,
+              `|------|-------|--------|------|`,
               rows,
               ``,
               `> Generated from the [wiki test plan](../../wiki/Test-Plan-PR-${prNumber}) · Powered by GitHub Models gpt-4o-mini`,
